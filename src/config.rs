@@ -1,0 +1,433 @@
+use figment::{providers::Env, Figment};
+use serde::{Deserialize, Serialize};
+use solana_sdk::signature::Keypair;
+
+/// Shared configuration used by both Jupiter and Titan
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SharedConfig {
+    /// Solana RPC endpoint URL
+    pub rpc_url: String,
+    /// Slippage tolerance in basis points (e.g., 25 = 0.25%)
+    pub slippage_bps: u16,
+    /// Wallet keypair (base58 encoded string, JSON array, or comma-separated bytes)
+    /// Optional - not required for simulation/quote-only operations
+    pub wallet_keypair: Option<String>,
+    /// Compute unit price in micro lamports
+    pub compute_unit_price_micro_lamports: u64,
+}
+
+impl Default for SharedConfig {
+    fn default() -> Self {
+        Self {
+            rpc_url: "https://api.mainnet-beta.solana.com".to_string(),
+            slippage_bps: 50, // 0.5% default slippage
+            wallet_keypair: None,
+            compute_unit_price_micro_lamports: 0,
+        }
+    }
+}
+
+/// Jupiter-specific configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct JupiterConfig {
+    /// Jupiter Swap API URL
+    pub jup_swap_api_url: String,
+}
+
+impl Default for JupiterConfig {
+    fn default() -> Self {
+        Self {
+            jup_swap_api_url: "https://quote-api.jup.ag/v6".to_string(),
+        }
+    }
+}
+
+/// Titan-specific configuration
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TitanConfig {
+    /// Titan WebSocket endpoint (e.g., "us1.api.demo.titan.exchange")
+    pub titan_ws_endpoint: String,
+    /// Titan API key (required for direct mode)
+    pub titan_api_key: Option<String>,
+    /// Hermes proxy endpoint (alternative to direct mode)
+    pub hermes_endpoint: Option<String>,
+}
+
+impl Default for TitanConfig {
+    fn default() -> Self {
+        Self {
+            titan_ws_endpoint: String::new(),
+            titan_api_key: None,
+            hermes_endpoint: None,
+        }
+    }
+}
+
+/// Complete client configuration combining shared, Jupiter, and Titan configs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientConfig {
+    #[serde(default)]
+    pub shared: SharedConfig,
+    #[serde(default)]
+    pub jupiter: JupiterConfig,
+    /// Titan configuration (optional - if not provided, Titan will not be used)
+    #[serde(default)]
+    pub titan: Option<TitanConfig>,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            shared: SharedConfig::default(),
+            jupiter: JupiterConfig::default(),
+            titan: None,
+        }
+    }
+}
+
+impl ClientConfig {
+    /// Load configuration from environment variables using figment
+    ///
+    /// Environment variables should be prefixed with `DEX_SUPERAGG_` and use `__` to separate nested keys.
+    /// Examples:
+    /// - `DEX_SUPERAGG_SHARED__RPC_URL` for `shared.rpc_url`
+    /// - `DEX_SUPERAGG_JUPITER__JUP_SWAP_API_URL` for `jupiter.jup_swap_api_url`
+    /// - `DEX_SUPERAGG_TITAN__TITAN_WS_ENDPOINT` for `titan.titan_ws_endpoint`
+    pub fn from_env() -> Result<Self, figment::Error> {
+        Figment::new()
+            .merge(Env::prefixed("DEX_SUPERAGG_").split("__"))
+            .extract()
+    }
+
+    /// Check if Titan is configured
+    pub fn is_titan_configured(&self) -> bool {
+        self.titan
+            .as_ref()
+            .map(|t| !t.titan_ws_endpoint.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Get the wallet keypair from the configuration
+    /// Returns None if no keypair is configured (useful for simulation/quote-only operations)
+    pub fn get_keypair(&self) -> anyhow::Result<Option<Keypair>> {
+        let wallet_keypair = match &self.shared.wallet_keypair {
+            Some(kp) => kp,
+            None => return Ok(None),
+        };
+
+        // Try parsing as base58 string first
+        if let Ok(bytes) = bs58::decode(wallet_keypair).into_vec() {
+            if bytes.len() == 64 {
+                if let Ok(keypair) = Keypair::from_bytes(&bytes) {
+                    return Ok(Some(keypair));
+                }
+            }
+        }
+
+        // Try parsing as bytes (comma-separated or JSON array)
+        let bytes: Vec<u8> = if wallet_keypair.starts_with('[') {
+            // JSON array format
+            serde_json::from_str(wallet_keypair)
+                .map_err(|e| anyhow::anyhow!("Failed to parse wallet keypair as JSON: {}", e))?
+        } else if wallet_keypair.contains(',') {
+            // Comma-separated format
+            wallet_keypair
+                .split(',')
+                .map(|s| s.trim().parse::<u8>())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| anyhow::anyhow!("Failed to parse wallet keypair bytes: {}", e))?
+        } else {
+            return Err(anyhow::anyhow!(
+                "Invalid wallet keypair format. Expected base58 string, JSON array, or comma-separated bytes"
+            ));
+        };
+
+        Keypair::from_bytes(&bytes)
+            .map(|kp| Some(kp))
+            .map_err(|e| anyhow::anyhow!("Failed to create keypair from bytes: {}", e))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use solana_sdk::signature::Signer;
+
+    #[test]
+    fn test_config_defaults() {
+        let shared = SharedConfig::default();
+        assert_eq!(shared.slippage_bps, 50);
+        assert!(!shared.rpc_url.is_empty());
+
+        let jupiter = JupiterConfig::default();
+        assert!(!jupiter.jup_swap_api_url.is_empty());
+    }
+
+    #[test]
+    fn test_load_config_from_env() {
+        figment::Jail::expect_with(|jail| {
+            // Set shared config environment variables
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__RPC_URL",
+                "https://api.testnet.solana.com",
+            );
+            jail.set_env("DEX_SUPERAGG_SHARED__SLIPPAGE_BPS", "100");
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__WALLET_KEYPAIR",
+                "5KQwrPtwYgXv3LvWy2YXL4LwzFjU4Lsa6Yc9t7veZmn8qJxVzN",
+            );
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__COMPUTE_UNIT_PRICE_MICRO_LAMPORTS",
+                "5000",
+            );
+
+            // Set Jupiter config environment variables
+            jail.set_env(
+                "DEX_SUPERAGG_JUPITER__JUP_SWAP_API_URL",
+                "https://test-api.jup.ag/v6",
+            );
+
+            // Set Titan config environment variables
+            jail.set_env(
+                "DEX_SUPERAGG_TITAN__TITAN_WS_ENDPOINT",
+                "us1.api.test.titan.exchange",
+            );
+            jail.set_env("DEX_SUPERAGG_TITAN__TITAN_API_KEY", "test_titan_api_key");
+            jail.set_env(
+                "DEX_SUPERAGG_TITAN__HERMES_ENDPOINT",
+                "https://hermes.test.titan.exchange",
+            );
+
+            let config = ClientConfig::from_env()?;
+
+            // Verify shared config
+            assert_eq!(config.shared.rpc_url, "https://api.testnet.solana.com");
+            assert_eq!(config.shared.slippage_bps, 100);
+            assert_eq!(
+                config.shared.wallet_keypair,
+                Some("5KQwrPtwYgXv3LvWy2YXL4LwzFjU4Lsa6Yc9t7veZmn8qJxVzN".to_string())
+            );
+            assert_eq!(config.shared.compute_unit_price_micro_lamports, 5000);
+
+            // Verify Jupiter config
+            assert_eq!(
+                config.jupiter.jup_swap_api_url,
+                "https://test-api.jup.ag/v6"
+            );
+
+            // Verify Titan config
+            let titan = config
+                .titan
+                .as_ref()
+                .expect("Titan config should be present");
+            assert_eq!(titan.titan_ws_endpoint, "us1.api.test.titan.exchange");
+            assert_eq!(titan.titan_api_key, Some("test_titan_api_key".to_string()));
+            assert_eq!(
+                titan.hermes_endpoint,
+                Some("https://hermes.test.titan.exchange".to_string())
+            );
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_env_override_defaults() {
+        figment::Jail::expect_with(|jail| {
+            // Only set required fields, others should use defaults
+            jail.set_env("DEX_SUPERAGG_SHARED__WALLET_KEYPAIR", "test_keypair");
+            jail.set_env(
+                "DEX_SUPERAGG_TITAN__TITAN_WS_ENDPOINT",
+                "test.titan.exchange",
+            );
+            // Don't set Jupiter config - it should use defaults automatically
+
+            // Override one default value
+            jail.set_env("DEX_SUPERAGG_SHARED__SLIPPAGE_BPS", "75");
+
+            let config = ClientConfig::from_env()?;
+
+            // Verify overridden value
+            assert_eq!(config.shared.slippage_bps, 75);
+
+            // Verify defaults are used
+            assert_eq!(config.shared.rpc_url, SharedConfig::default().rpc_url);
+            assert_eq!(
+                config.jupiter.jup_swap_api_url,
+                JupiterConfig::default().jup_swap_api_url
+            );
+            assert_eq!(config.shared.compute_unit_price_micro_lamports, 0);
+
+            // Verify set values
+            assert_eq!(
+                config.shared.wallet_keypair,
+                Some("test_keypair".to_string())
+            );
+            let titan = config
+                .titan
+                .as_ref()
+                .expect("Titan config should be present");
+            assert_eq!(titan.titan_ws_endpoint, "test.titan.exchange");
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_titan_not_configured() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("DEX_SUPERAGG_SHARED__WALLET_KEYPAIR", "test_keypair");
+            // Don't set any Titan config - it should be None
+
+            let config = ClientConfig::from_env()?;
+
+            assert_eq!(config.titan, None);
+            assert!(!config.is_titan_configured());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_wallet_keypair_not_configured() {
+        figment::Jail::expect_with(|jail| {
+            // Don't set wallet_keypair - it should be None (useful for simulations)
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__RPC_URL",
+                "https://api.testnet.solana.com",
+            );
+
+            let config = ClientConfig::from_env()?;
+
+            assert_eq!(config.shared.wallet_keypair, None);
+            assert!(config
+                .get_keypair()
+                .map_err(|e| figment::Error::from(e.to_string()))?
+                .is_none());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_wallet_keypair_base58() {
+        figment::Jail::expect_with(|jail| {
+            // Create a test keypair and encode it as base58
+            let test_keypair = solana_sdk::signature::Keypair::new();
+            let base58_keypair = bs58::encode(test_keypair.to_bytes()).into_string();
+
+            jail.set_env("DEX_SUPERAGG_SHARED__WALLET_KEYPAIR", &base58_keypair);
+
+            let config = ClientConfig::from_env()?;
+            let parsed_keypair = config
+                .get_keypair()
+                .map_err(|e| figment::Error::from(e.to_string()))?
+                .expect("Keypair should be parsed");
+
+            assert_eq!(parsed_keypair.pubkey(), test_keypair.pubkey());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_wallet_keypair_json_array_parsing() {
+        // Test that JSON array format can be parsed (even though figment doesn't support it in env vars)
+        // This format is useful when loading config from files or other sources
+        let test_keypair = solana_sdk::signature::Keypair::new();
+        let json_keypair = serde_json::to_string(&test_keypair.to_bytes().to_vec()).unwrap();
+
+        // Create a config with JSON array format directly (bypassing figment)
+        let mut shared = SharedConfig::default();
+        shared.wallet_keypair = Some(json_keypair);
+
+        let config = ClientConfig {
+            shared,
+            ..Default::default()
+        };
+
+        let parsed_keypair = config
+            .get_keypair()
+            .expect("Keypair should be parsed")
+            .expect("Keypair should be Some");
+
+        assert_eq!(parsed_keypair.pubkey(), test_keypair.pubkey());
+    }
+
+    #[test]
+    fn test_wallet_keypair_comma_separated() {
+        figment::Jail::expect_with(|jail| {
+            // Create a test keypair and encode it as comma-separated bytes
+            let test_keypair = solana_sdk::signature::Keypair::new();
+            let bytes = test_keypair.to_bytes();
+            let comma_keypair = bytes
+                .iter()
+                .map(|b| b.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+
+            jail.set_env("DEX_SUPERAGG_SHARED__WALLET_KEYPAIR", &comma_keypair);
+
+            let config = ClientConfig::from_env()?;
+            let parsed_keypair = config
+                .get_keypair()
+                .map_err(|e| figment::Error::from(e.to_string()))?
+                .expect("Keypair should be parsed");
+
+            assert_eq!(parsed_keypair.pubkey(), test_keypair.pubkey());
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_wallet_keypair_invalid_format() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("DEX_SUPERAGG_SHARED__WALLET_KEYPAIR", "invalid_format");
+
+            let config = ClientConfig::from_env()?;
+            let result = config.get_keypair();
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid wallet keypair format"));
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_optional_titan_fields() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env("DEX_SUPERAGG_SHARED__WALLET_KEYPAIR", "test_keypair");
+            jail.set_env(
+                "DEX_SUPERAGG_TITAN__TITAN_WS_ENDPOINT",
+                "test.titan.exchange",
+            );
+            // Don't set Jupiter config - it should use defaults automatically
+            // Don't set titan_api_key or hermes_endpoint - they should be None
+
+            let config = ClientConfig::from_env()?;
+
+            let titan = config
+                .titan
+                .as_ref()
+                .expect("Titan config should be present");
+            assert_eq!(titan.titan_api_key, None);
+            assert_eq!(titan.hermes_endpoint, None);
+            assert_eq!(titan.titan_ws_endpoint, "test.titan.exchange");
+            // Verify Jupiter uses default
+            assert_eq!(
+                config.jupiter.jup_swap_api_url,
+                JupiterConfig::default().jup_swap_api_url
+            );
+
+            Ok(())
+        });
+    }
+}
