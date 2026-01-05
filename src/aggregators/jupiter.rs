@@ -147,10 +147,10 @@ impl JupiterAggregator {
         tx = VersionedTransaction::try_new(tx.message, &[&self.signer])
             .map_err(|e| anyhow!("Failed to sign transaction: {}", e))?;
 
-        // Send transaction using spawn_blocking to avoid blocking the async runtime
-        let rpc_client = self.rpc_client.clone();
-        let sig = tokio::task::spawn_blocking(move || {
-            rpc_client.send_and_confirm_transaction_with_spinner_and_config(
+        // Send transaction
+        let sig = self
+            .rpc_client
+            .send_and_confirm_transaction_with_spinner_and_config(
                 &tx,
                 CommitmentConfig::finalized(),
                 RpcSendTransactionConfig {
@@ -159,10 +159,7 @@ impl JupiterAggregator {
                     ..Default::default()
                 },
             )
-        })
-        .await
-        .map_err(|e| anyhow!("Failed to spawn blocking task: {}", e))?
-        .map_err(|e| anyhow!("Failed to send transaction: {}", e))?;
+            .map_err(|e| anyhow!("Failed to send transaction: {}", e))?;
 
         Ok(sig.to_string())
     }
