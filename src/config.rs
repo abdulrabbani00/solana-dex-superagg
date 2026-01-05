@@ -5,14 +5,42 @@ use solana_sdk::{commitment_config::CommitmentConfig, signature::Keypair};
 use std::time::Duration;
 use tokio::time::timeout;
 
-/// Preferred aggregator for routing swaps
+/// Aggregator selection for preferred routing
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum PreferredAggregator {
+pub enum Aggregator {
     /// Use Jupiter aggregator
     Jupiter,
     /// Use Titan aggregator
     Titan,
+}
+
+/// Routing strategy for determining which aggregator to use
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RoutingStrategy {
+    /// Use a preferred aggregator
+    ///
+    /// # Fields
+    /// * `aggregator` - Which aggregator to use (Jupiter or Titan)
+    /// * `simulate` - Whether to simulate the swap before executing (true) or just ship it (false)
+    PreferredAggregator {
+        aggregator: Aggregator,
+        simulate: bool,
+    },
+    /// Compare price impact from both aggregators and use the one with lowest impact
+    LowestPriceImpact,
+    /// Test multiple slippage levels and use the one with lowest slippage that succeeds
+    ///
+    /// # Fields
+    /// * `floor_slippage_bps` - Starting slippage in basis points (e.g., 10 = 0.1%)
+    /// * `max_slippage_bps` - Maximum slippage to test in basis points (e.g., 100 = 1%)
+    /// * `step_bps` - Step size for climbing slippage in basis points (e.g., 5 = 0.05%)
+    LowestSlippageClimber {
+        floor_slippage_bps: u16,
+        max_slippage_bps: u16,
+        step_bps: u16,
+    },
 }
 
 /// Shared configuration used by both Jupiter and Titan
@@ -28,8 +56,8 @@ pub struct SharedConfig {
     pub wallet_keypair: Option<String>,
     /// Compute unit price in micro lamports
     pub compute_unit_price_micro_lamports: u64,
-    /// Preferred aggregator for routing swaps (None = use best price)
-    pub preferred_aggregator: Option<PreferredAggregator>,
+    /// Routing strategy for determining which aggregator to use (None = use best price)
+    pub routing_strategy: Option<RoutingStrategy>,
 }
 
 impl Default for SharedConfig {
@@ -39,7 +67,7 @@ impl Default for SharedConfig {
             slippage_bps: 50, // 0.5% default slippage
             wallet_keypair: None,
             compute_unit_price_micro_lamports: 0,
-            preferred_aggregator: None, // None = use best price from available aggregators
+            routing_strategy: None, // None = use best price from available aggregators
         }
     }
 }
@@ -312,7 +340,7 @@ mod tests {
         let shared = SharedConfig::default();
         assert_eq!(shared.slippage_bps, 50);
         assert!(!shared.rpc_url.is_empty());
-        assert_eq!(shared.preferred_aggregator, None);
+        assert_eq!(shared.routing_strategy, None);
 
         let jupiter = JupiterConfig::default();
         assert!(!jupiter.jup_swap_api_url.is_empty());
@@ -660,29 +688,171 @@ mod tests {
     }
 
     #[test]
-    fn test_preferred_aggregator_default() {
-        let shared = SharedConfig::default();
-        assert_eq!(shared.preferred_aggregator, None);
+    fn test_routing_strategy_default() {
+        figment::Jail::expect_with(|jail| {
+            // Don't set routing_strategy - should default to None
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__RPC_URL",
+                "https://api.testnet.solana.com",
+            );
+
+            let config = ClientConfig::from_env()?;
+            assert_eq!(config.shared.routing_strategy, None);
+
+            Ok(())
+        });
     }
 
     #[test]
-    fn test_preferred_aggregator_from_env() {
+    fn test_routing_strategy_preferred_aggregator_jupiter() {
         figment::Jail::expect_with(|jail| {
-            // Test Jupiter
-            jail.set_env("DEX_SUPERAGG_SHARED__PREFERRED_AGGREGATOR", "jupiter");
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__RPC_URL",
+                "https://api.testnet.solana.com",
+            );
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__TYPE",
+                "preferred_aggregator",
+            );
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__AGGREGATOR",
+                "jupiter",
+            );
+            jail.set_env("DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__SIMULATE", "true");
+
             let config = ClientConfig::from_env()?;
-            assert_eq!(
-                config.shared.preferred_aggregator,
-                Some(PreferredAggregator::Jupiter)
+
+            match &config.shared.routing_strategy {
+                Some(RoutingStrategy::PreferredAggregator {
+                    aggregator,
+                    simulate,
+                }) => {
+                    assert_eq!(*aggregator, Aggregator::Jupiter);
+                    assert_eq!(*simulate, true);
+                }
+                _ => panic!("Expected PreferredAggregator with Jupiter"),
+            }
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_routing_strategy_preferred_aggregator_titan() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__RPC_URL",
+                "https://api.testnet.solana.com",
+            );
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__TYPE",
+                "preferred_aggregator",
+            );
+            jail.set_env("DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__AGGREGATOR", "titan");
+            jail.set_env("DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__SIMULATE", "false");
+
+            let config = ClientConfig::from_env()?;
+
+            match &config.shared.routing_strategy {
+                Some(RoutingStrategy::PreferredAggregator {
+                    aggregator,
+                    simulate,
+                }) => {
+                    assert_eq!(*aggregator, Aggregator::Titan);
+                    assert_eq!(*simulate, false);
+                }
+                _ => panic!("Expected PreferredAggregator with Titan"),
+            }
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_routing_strategy_lowest_price_impact() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__RPC_URL",
+                "https://api.testnet.solana.com",
+            );
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__TYPE",
+                "lowest_price_impact",
             );
 
-            // Test Titan
-            jail.set_env("DEX_SUPERAGG_SHARED__PREFERRED_AGGREGATOR", "titan");
             let config = ClientConfig::from_env()?;
-            assert_eq!(
-                config.shared.preferred_aggregator,
-                Some(PreferredAggregator::Titan)
+
+            match &config.shared.routing_strategy {
+                Some(RoutingStrategy::LowestPriceImpact) => {
+                    // Success
+                }
+                _ => panic!("Expected LowestPriceImpact"),
+            }
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_routing_strategy_fastest_sim() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__RPC_URL",
+                "https://api.testnet.solana.com",
             );
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__TYPE",
+                "lowest_price_impact",
+            );
+
+            let config = ClientConfig::from_env()?;
+
+            match &config.shared.routing_strategy {
+                Some(RoutingStrategy::LowestPriceImpact) => {
+                    // Success
+                }
+                _ => panic!("Expected LowestPriceImpact"),
+            }
+
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn test_routing_strategy_lowest_slippage_climber() {
+        figment::Jail::expect_with(|jail| {
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__RPC_URL",
+                "https://api.testnet.solana.com",
+            );
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__TYPE",
+                "lowest_slippage_climber",
+            );
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__FLOOR_SLIPPAGE_BPS",
+                "10",
+            );
+            jail.set_env(
+                "DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__MAX_SLIPPAGE_BPS",
+                "100",
+            );
+            jail.set_env("DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__STEP_BPS", "5");
+
+            let config = ClientConfig::from_env()?;
+
+            match &config.shared.routing_strategy {
+                Some(RoutingStrategy::LowestSlippageClimber {
+                    floor_slippage_bps,
+                    max_slippage_bps,
+                    step_bps,
+                }) => {
+                    assert_eq!(*floor_slippage_bps, 10);
+                    assert_eq!(*max_slippage_bps, 100);
+                    assert_eq!(*step_bps, 5);
+                }
+                _ => panic!("Expected LowestSlippageClimber"),
+            }
 
             Ok(())
         });
