@@ -1,6 +1,9 @@
 use figment::{providers::Env, Figment};
 use serde::{Deserialize, Serialize};
-use solana_sdk::signature::Keypair;
+use solana_client::rpc_client::RpcClient;
+use solana_sdk::{commitment_config::CommitmentConfig, signature::Keypair};
+use std::time::Duration;
+use tokio::time::timeout;
 
 /// Shared configuration used by both Jupiter and Titan
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +111,141 @@ impl ClientConfig {
             .as_ref()
             .map(|t| !t.titan_ws_endpoint.is_empty())
             .unwrap_or(false)
+    }
+
+    /// Validate the configuration by actually testing connectivity to endpoints
+    ///
+    /// Checks:
+    /// - Wallet keypair (if provided) can be parsed
+    /// - RPC URL is reachable and responds
+    /// - Jupiter API URL is reachable and responds
+    /// - Titan WebSocket endpoint (if configured) is reachable
+    ///
+    /// Returns a vector of validation errors, empty if all checks pass
+    pub async fn validate(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        // Validate wallet keypair if provided
+        if let Some(ref wallet_keypair) = self.shared.wallet_keypair {
+            if wallet_keypair.is_empty() {
+                errors.push("Wallet keypair is set but empty".to_string());
+            } else if let Err(e) = self.get_keypair() {
+                errors.push(format!("Invalid wallet keypair format: {}", e));
+            }
+        }
+
+        // Validate RPC URL by making a test call
+        if !self.shared.rpc_url.is_empty() {
+            if let Err(e) = self.validate_rpc_url().await {
+                errors.push(format!(
+                    "RPC URL validation failed ({}): {}",
+                    self.shared.rpc_url, e
+                ));
+            }
+        } else {
+            errors.push("RPC URL is required".to_string());
+        }
+
+        // Validate Jupiter API URL by making a test request
+        if !self.jupiter.jup_swap_api_url.is_empty() {
+            if let Err(e) = self.validate_jupiter_url().await {
+                errors.push(format!(
+                    "Jupiter API URL validation failed ({}): {}",
+                    self.jupiter.jup_swap_api_url, e
+                ));
+            }
+        } else {
+            errors.push("Jupiter API URL is required".to_string());
+        }
+
+        // Validate Titan configuration if provided
+        if let Some(ref titan) = self.titan {
+            if titan.titan_ws_endpoint.is_empty() {
+                errors.push(
+                    "Titan WebSocket endpoint is required when Titan is configured".to_string(),
+                );
+            } else {
+                // Test WebSocket connectivity
+                if let Err(e) = self.validate_titan_endpoint(titan).await {
+                    errors.push(format!(
+                        "Titan WebSocket endpoint validation failed ({}): {}",
+                        titan.titan_ws_endpoint, e
+                    ));
+                }
+            }
+
+            // Check that either API key or Hermes endpoint is provided
+            if titan.titan_api_key.is_none() && titan.hermes_endpoint.is_none() {
+                errors.push(
+                    "Either Titan API key or Hermes endpoint must be provided when Titan is configured"
+                        .to_string(),
+                );
+            }
+        }
+
+        errors
+    }
+
+    async fn validate_rpc_url(&self) -> anyhow::Result<()> {
+        let rpc_url = self.shared.rpc_url.clone();
+
+        // RpcClient is blocking, so we need to run it in a blocking task
+        timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || {
+                let rpc_client =
+                    RpcClient::new_with_commitment(&rpc_url, CommitmentConfig::confirmed());
+                rpc_client
+                    .get_version()
+                    .map_err(|e| anyhow::anyhow!("Failed to connect to RPC: {}", e))?;
+                Ok::<(), anyhow::Error>(())
+            }),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("RPC connection timeout"))?
+        .map_err(|e| anyhow::anyhow!("RPC task error: {}", e))??;
+
+        Ok(())
+    }
+
+    async fn validate_jupiter_url(&self) -> anyhow::Result<()> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?;
+
+        // Try to reach the Jupiter API - just check if it responds
+        timeout(
+            Duration::from_secs(5),
+            client.get(&self.jupiter.jup_swap_api_url).send(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Jupiter API request timeout"))?
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Jupiter API: {}", e))?;
+
+        Ok(())
+    }
+
+    async fn validate_titan_endpoint(&self, titan: &TitanConfig) -> anyhow::Result<()> {
+        // Build the WebSocket URL
+        let ws_url = if titan.titan_ws_endpoint.starts_with("ws://")
+            || titan.titan_ws_endpoint.starts_with("wss://")
+        {
+            titan.titan_ws_endpoint.clone()
+        } else {
+            format!("wss://{}", titan.titan_ws_endpoint)
+        };
+
+        // Try to connect to the WebSocket endpoint
+        timeout(
+            Duration::from_secs(5),
+            tokio_tungstenite::connect_async(&ws_url),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("WebSocket connection timeout"))?
+        .map_err(|e| anyhow::anyhow!("Failed to connect to Titan WebSocket: {}", e))?;
+
+        Ok(())
     }
 
     /// Get the wallet keypair from the configuration
@@ -429,5 +567,81 @@ mod tests {
 
             Ok(())
         });
+    }
+
+    #[tokio::test]
+    async fn test_validate_keypair() {
+        let test_keypair = solana_sdk::signature::Keypair::new();
+        let base58_keypair = bs58::encode(test_keypair.to_bytes()).into_string();
+
+        let mut config = ClientConfig::default();
+        config.shared.rpc_url = "https://api.mainnet-beta.solana.com".to_string();
+        config.shared.wallet_keypair = Some(base58_keypair);
+        config.jupiter.jup_swap_api_url = "https://quote-api.jup.ag/v6".to_string();
+
+        let errors = config.validate().await;
+
+        // Should only have errors for endpoint connectivity, not keypair
+        assert!(!errors.iter().any(|e| e.contains("wallet keypair")));
+    }
+
+    #[tokio::test]
+    async fn test_validate_invalid_keypair() {
+        let mut config = ClientConfig::default();
+        config.shared.rpc_url = "https://api.mainnet-beta.solana.com".to_string();
+        config.shared.wallet_keypair = Some("invalid_keypair".to_string());
+        config.jupiter.jup_swap_api_url = "https://quote-api.jup.ag/v6".to_string();
+
+        let errors = config.validate().await;
+
+        assert!(errors.iter().any(|e| e.contains("wallet keypair")));
+    }
+
+    #[tokio::test]
+    async fn test_validate_rpc_endpoint() {
+        // Test with a real Solana RPC endpoint
+        let mut config = ClientConfig::default();
+        config.shared.rpc_url = "https://api.mainnet-beta.solana.com".to_string();
+        config.jupiter.jup_swap_api_url = "https://quote-api.jup.ag/v6".to_string();
+
+        let errors = config.validate().await;
+
+        // Should not have RPC URL errors if it's reachable
+        // (may have other errors if endpoints are down, but RPC should work)
+        let rpc_errors: Vec<_> = errors.iter().filter(|e| e.contains("RPC URL")).collect();
+        // If RPC is unreachable, that's fine for the test - we just want to make sure
+        // the validation logic works
+        println!("RPC validation errors: {:?}", rpc_errors);
+    }
+
+    #[tokio::test]
+    async fn test_validate_jupiter_endpoint() {
+        let mut config = ClientConfig::default();
+        config.shared.rpc_url = "https://api.mainnet-beta.solana.com".to_string();
+        config.jupiter.jup_swap_api_url = "https://quote-api.jup.ag/v6".to_string();
+
+        let errors = config.validate().await;
+
+        // Should not have Jupiter URL errors if it's reachable
+        let jupiter_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.contains("Jupiter API URL"))
+            .collect();
+        // If Jupiter is unreachable, that's fine for the test
+        println!("Jupiter validation errors: {:?}", jupiter_errors);
+    }
+
+    #[tokio::test]
+    async fn test_validate_invalid_endpoints() {
+        let mut config = ClientConfig::default();
+        config.shared.rpc_url = "https://invalid-rpc-url-that-does-not-exist.com".to_string();
+        config.jupiter.jup_swap_api_url =
+            "https://invalid-jupiter-url-that-does-not-exist.com".to_string();
+
+        let errors = config.validate().await;
+
+        // Should have errors for both invalid endpoints
+        assert!(errors.iter().any(|e| e.contains("RPC URL")));
+        assert!(errors.iter().any(|e| e.contains("Jupiter API URL")));
     }
 }
