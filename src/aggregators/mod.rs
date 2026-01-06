@@ -13,6 +13,9 @@ pub struct SwapResult {
     pub signature: String,
     /// Output amount received (in lamports/base units)
     pub out_amount: u64,
+    /// Slippage tolerance actually used in basis points (e.g., 25 = 0.25%)
+    /// This is particularly useful for LowestSlippageClimber strategy to know which slippage level succeeded
+    pub slippage_bps_used: Option<u16>,
 }
 
 /// Result of a simulation/quote operation

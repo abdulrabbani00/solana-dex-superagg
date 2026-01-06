@@ -194,10 +194,8 @@ impl Default for JupiterConfig {
 pub struct TitanConfig {
     /// Titan WebSocket endpoint (e.g., "us1.api.demo.titan.exchange")
     pub titan_ws_endpoint: String,
-    /// Titan API key (required for direct mode)
+    /// Titan API key (required)
     pub titan_api_key: Option<String>,
-    /// Hermes proxy endpoint (alternative to direct mode)
-    pub hermes_endpoint: Option<String>,
 }
 
 impl Default for TitanConfig {
@@ -205,7 +203,6 @@ impl Default for TitanConfig {
         Self {
             titan_ws_endpoint: String::new(),
             titan_api_key: None,
-            hermes_endpoint: None,
         }
     }
 }
@@ -225,6 +222,8 @@ pub struct RouteConfig {
     /// Behavior for handling output Associated Token Account (ATA) creation
     #[serde(default)]
     pub output_ata: OutputAtaBehavior,
+    /// Slippage tolerance in basis points (overrides config default if Some)
+    pub slippage_bps: Option<u16>,
 }
 
 impl Default for RouteConfig {
@@ -234,6 +233,7 @@ impl Default for RouteConfig {
             routing_strategy: Some(RoutingStrategy::BestPrice), // Default to best price strategy
             retry_tx_landing: 3,
             output_ata: OutputAtaBehavior::Create, // Default to creating the ATA
+            slippage_bps: None,                    // Use config default if not specified
         }
     }
 }
@@ -245,6 +245,7 @@ impl From<&SharedConfig> for RouteConfig {
             routing_strategy: shared.routing_strategy.clone(),
             retry_tx_landing: shared.retry_tx_landing,
             output_ata: OutputAtaBehavior::Create, // Default to creating the ATA
+            slippage_bps: None,                    // Use config default
         }
     }
 }
@@ -468,12 +469,9 @@ impl ClientConfig {
             ));
         }
 
-        // Check that either API key or Hermes endpoint is provided
-        if titan.titan_api_key.is_none() && titan.hermes_endpoint.is_none() {
-            errors.push(
-                "Either Titan API key or Hermes endpoint must be provided when Titan is configured"
-                    .to_string(),
-            );
+        // Check that API key is provided
+        if titan.titan_api_key.is_none() {
+            errors.push("Titan API key must be provided when Titan is configured".to_string());
         }
 
         if errors.is_empty() {
@@ -503,23 +501,20 @@ impl ClientConfig {
 
     async fn validate_titan_endpoint(&self, titan: &TitanConfig) -> anyhow::Result<()> {
         // Determine Titan endpoint configuration (same logic as TitanAggregator::new)
-        let (titan_ws_endpoint, titan_api_key) = if let Some(api_key) = &titan.titan_api_key {
-            if api_key.is_empty() {
-                return Err(anyhow::anyhow!("TITAN_API_KEY is set but empty"));
-            }
-            (titan.titan_ws_endpoint.clone(), api_key.clone())
-        } else if let Some(hermes_endpoint) = &titan.hermes_endpoint {
-            let ws_endpoint = format!("{}/ws", hermes_endpoint);
-            (ws_endpoint, String::new())
-        } else {
-            return Err(anyhow::anyhow!(
-                "Either titan_api_key or hermes_endpoint must be provided"
-            ));
-        };
+        let titan_api_key = titan
+            .titan_api_key
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Titan API key must be provided"))?;
+
+        if titan_api_key.is_empty() {
+            return Err(anyhow::anyhow!("TITAN_API_KEY is set but empty"));
+        }
+
+        let titan_ws_endpoint = titan.titan_ws_endpoint.clone();
 
         // Create TitanClient and try to connect (let TitanClient handle all URL building)
         use crate::aggregators::titan::TitanClient;
-        let titan_client = TitanClient::new(titan_ws_endpoint, titan_api_key);
+        let titan_client = TitanClient::new(titan_ws_endpoint, titan_api_key.clone());
 
         // Try to connect with timeout
         timeout(Duration::from_secs(5), titan_client.connect())
@@ -627,10 +622,6 @@ mod tests {
                 "us1.api.test.titan.exchange",
             );
             jail.set_env("DEX_SUPERAGG_TITAN__TITAN_API_KEY", "test_titan_api_key");
-            jail.set_env(
-                "DEX_SUPERAGG_TITAN__HERMES_ENDPOINT",
-                "https://hermes.test.titan.exchange",
-            );
 
             let config = ClientConfig::from_env()?;
 
@@ -656,10 +647,6 @@ mod tests {
                 .expect("Titan config should be present");
             assert_eq!(titan.titan_ws_endpoint, "us1.api.test.titan.exchange");
             assert_eq!(titan.titan_api_key, Some("test_titan_api_key".to_string()));
-            assert_eq!(
-                titan.hermes_endpoint,
-                Some("https://hermes.test.titan.exchange".to_string())
-            );
 
             Ok(())
         });
@@ -877,7 +864,7 @@ mod tests {
                 "test.titan.exchange",
             );
             // Don't set Jupiter config - it should use defaults automatically
-            // Don't set titan_api_key or hermes_endpoint - they should be None
+            // Don't set titan_api_key - it should be None
 
             let config = ClientConfig::from_env()?;
 
@@ -886,7 +873,6 @@ mod tests {
                 .as_ref()
                 .expect("Titan config should be present");
             assert_eq!(titan.titan_api_key, None);
-            assert_eq!(titan.hermes_endpoint, None);
             assert_eq!(titan.titan_ws_endpoint, "test.titan.exchange");
             // Verify Jupiter uses default
             assert_eq!(

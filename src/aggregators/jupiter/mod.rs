@@ -166,6 +166,7 @@ impl DexAggregator for JupiterAggregator {
         Ok(SwapResult {
             signature: sig.to_string(),
             out_amount,
+            slippage_bps_used: Some(slippage_bps),
         })
     }
 

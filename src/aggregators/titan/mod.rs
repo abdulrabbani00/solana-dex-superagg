@@ -45,27 +45,23 @@ impl TitanAggregator {
             .ok_or_else(|| anyhow!("Titan configuration not provided"))?;
 
         // Determine Titan endpoint configuration
-        let (titan_ws_endpoint, titan_api_key) = if let Some(api_key) = &titan_config.titan_api_key
-        {
-            if api_key.is_empty() {
-                return Err(anyhow!("TITAN_API_KEY is set but empty"));
-            }
-            (titan_config.titan_ws_endpoint.clone(), api_key.clone())
-        } else if let Some(hermes_endpoint) = &titan_config.hermes_endpoint {
-            let ws_endpoint = format!("{}/ws", hermes_endpoint);
-            (ws_endpoint, String::new())
-        } else {
-            return Err(anyhow!(
-                "Either titan_api_key or hermes_endpoint must be provided"
-            ));
-        };
+        let titan_api_key = titan_config
+            .titan_api_key
+            .as_ref()
+            .ok_or_else(|| anyhow!("Titan API key must be provided"))?;
+
+        if titan_api_key.is_empty() {
+            return Err(anyhow!("TITAN_API_KEY is set but empty"));
+        }
+
+        let titan_ws_endpoint = titan_config.titan_ws_endpoint.clone();
 
         // Create RPC clients
         let rpc_client = RpcClient::new(&config.shared.rpc_url);
         let async_rpc_client = AsyncRpcClient::new(config.shared.rpc_url.clone());
 
         // Create Titan client and connect
-        let titan_client = TitanClient::new(titan_ws_endpoint, titan_api_key);
+        let titan_client = TitanClient::new(titan_ws_endpoint, titan_api_key.clone());
         titan_client
             .connect()
             .await
@@ -84,24 +80,17 @@ impl TitanAggregator {
     pub async fn with_config(
         titan_ws_endpoint: String,
         titan_api_key: Option<String>,
-        hermes_endpoint: Option<String>,
         rpc_url: String,
         signer: Arc<Keypair>,
     ) -> Result<Self> {
         // Determine Titan endpoint configuration
-        let (ws_endpoint, api_key) = if let Some(api_key) = titan_api_key {
-            if api_key.is_empty() {
-                return Err(anyhow!("TITAN_API_KEY is set but empty"));
-            }
-            (titan_ws_endpoint, api_key)
-        } else if let Some(hermes_endpoint) = hermes_endpoint {
-            let ws_endpoint = format!("{}/ws", hermes_endpoint);
-            (ws_endpoint, String::new())
-        } else {
-            return Err(anyhow!(
-                "Either titan_api_key or hermes_endpoint must be provided"
-            ));
-        };
+        let api_key = titan_api_key.ok_or_else(|| anyhow!("Titan API key must be provided"))?;
+
+        if api_key.is_empty() {
+            return Err(anyhow!("TITAN_API_KEY is set but empty"));
+        }
+
+        let ws_endpoint = titan_ws_endpoint;
 
         // Create RPC clients
         let rpc_client = RpcClient::new(&rpc_url);
@@ -189,6 +178,7 @@ impl DexAggregator for TitanAggregator {
         Ok(SwapResult {
             signature: tx_signature.to_string(),
             out_amount: route.out_amount,
+            slippage_bps_used: Some(slippage_bps),
         })
     }
 

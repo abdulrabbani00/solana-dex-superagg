@@ -233,7 +233,10 @@ impl DexSuperAggClient {
         amount: u64,
         route_config: RouteConfig,
     ) -> Result<SwapResult> {
-        let slippage_bps = self.config.shared.slippage_bps;
+        // Use slippage from route config if provided, otherwise use config default
+        let slippage_bps = route_config
+            .slippage_bps
+            .unwrap_or(self.config.shared.slippage_bps);
 
         // Handle output ATA creation based on route config
         match route_config.output_ata {
@@ -370,6 +373,13 @@ impl DexSuperAggClient {
     }
 
     /// Execute swap using lowest slippage climber strategy
+    ///
+    /// This strategy tries multiple slippage levels starting from `floor_slippage_bps`
+    /// and incrementing by `step_bps` until a swap succeeds or `max_slippage_bps` is reached.
+    /// The returned `SwapResult` includes `slippage_bps_used` to show which slippage level succeeded.
+    ///
+    /// This function will log warnings if slippage climbs higher than the floor, indicating
+    /// that the swap required more slippage tolerance than initially expected.
     async fn swap_lowest_slippage_climber(
         &self,
         input: &str,
@@ -383,22 +393,79 @@ impl DexSuperAggClient {
         // Try each slippage level starting from floor
         let mut current_slippage = floor_slippage_bps;
         let mut last_error = None;
+        let mut attempt_count = 0;
+
+        println!(
+            "  Climbing slippage staircase (floor: {} bps, max: {} bps, step: {} bps)",
+            floor_slippage_bps, max_slippage_bps, step_bps
+        );
 
         while current_slippage <= max_slippage_bps {
+            attempt_count += 1;
+            println!(
+                "  Attempt {}: Trying slippage {} bps ({:.2}%)",
+                attempt_count,
+                current_slippage,
+                current_slippage as f64 / 100.0
+            );
+
             // Try swap with current slippage using best price strategy
             match self
                 .swap_best_price(input, output, amount, current_slippage, route_config)
                 .await
             {
-                Ok(result) => return Ok(result),
+                Ok(mut result) => {
+                    // Ensure slippage_bps_used is set (should already be set by aggregators, but ensure it)
+                    if result.slippage_bps_used.is_none() {
+                        result.slippage_bps_used = Some(current_slippage);
+                    }
+
+                    let slippage_used = result.slippage_bps_used.unwrap_or(current_slippage);
+
+                    // Warn if slippage climbed higher than floor
+                    if slippage_used > floor_slippage_bps {
+                        let excess_slippage = slippage_used - floor_slippage_bps;
+                        let excess_percent =
+                            (excess_slippage as f64 / floor_slippage_bps as f64) * 100.0;
+                        println!("  ⚠ Warning: Slippage climbed higher than expected!");
+                        println!(
+                            "    Floor slippage: {} bps ({:.2}%)",
+                            floor_slippage_bps,
+                            floor_slippage_bps as f64 / 100.0
+                        );
+                        println!(
+                            "    Actual slippage: {} bps ({:.2}%)",
+                            slippage_used,
+                            slippage_used as f64 / 100.0
+                        );
+                        println!(
+                            "    Excess: {} bps ({:.1}% higher than floor)",
+                            excess_slippage, excess_percent
+                        );
+                        println!("    Attempts needed: {}", attempt_count);
+                    } else {
+                        println!(
+                            "  ✓ Swap succeeded at floor slippage ({} bps)",
+                            slippage_used
+                        );
+                    }
+
+                    return Ok(result);
+                }
                 Err(e) => {
+                    println!("  ✗ Failed at {} bps: {}", current_slippage, e);
                     last_error = Some(e);
                     current_slippage += step_bps;
                 }
             }
         }
 
-        Err(last_error.unwrap_or_else(|| anyhow!("Failed to execute swap with any slippage level")))
+        Err(last_error.unwrap_or_else(|| {
+            anyhow!(
+                "Failed to execute swap with any slippage level (tried {} attempts)",
+                attempt_count
+            )
+        }))
     }
 
     /// Execute swap using best price (compare available aggregators)

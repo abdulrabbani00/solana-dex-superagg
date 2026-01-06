@@ -10,7 +10,7 @@
 //! - `DEX_SUPERAGG_SHARED__RPC_URL`: Solana RPC endpoint (required)
 //! - `DEX_SUPERAGG_SHARED__WALLET_KEYPAIR`: Wallet keypair (base58, JSON array, or comma-separated bytes) (required)
 //! - `DEX_SUPERAGG_TITAN__TITAN_WS_ENDPOINT`: Titan WebSocket endpoint (required for Titan tests)
-//! - `DEX_SUPERAGG_TITAN__TITAN_API_KEY` or `DEX_SUPERAGG_TITAN__HERMES_ENDPOINT`: Titan auth (required for Titan tests)
+//! - `DEX_SUPERAGG_TITAN__TITAN_API_KEY`: Titan API key (required for Titan tests)
 //!
 //! Optional environment variables:
 //! - `DEX_SUPERAGG_SHARED__SLIPPAGE_BPS`: Slippage in basis points (default: 25)
@@ -133,7 +133,7 @@ async fn test_titan_swap(
     input: &str,
     output: &str,
     amount: u64,
-    _slippage_bps: u16,
+    slippage_bps: u16,
 ) -> Result<()> {
     println!("Swapping {} lamports of {} -> {}", amount, input, output);
 
@@ -142,6 +142,7 @@ async fn test_titan_swap(
             aggregator: Aggregator::Titan,
             simulate: false, // Direct swap
         }),
+        slippage_bps: Some(slippage_bps),
         ..Default::default()
     };
 
@@ -152,6 +153,20 @@ async fn test_titan_swap(
     println!("  ✓ Swap successful!");
     println!("  Transaction: {}", result.signature);
     println!("  Output Amount: {} lamports", result.out_amount);
+    if let Some(slippage_used) = result.slippage_bps_used {
+        println!(
+            "  Slippage Used: {} bps ({:.2}%)",
+            slippage_used,
+            slippage_used as f64 / 100.0
+        );
+        // Validate slippage used is <= slippage requested
+        assert!(
+            slippage_used <= slippage_bps,
+            "Slippage used ({}) should be <= slippage requested ({})",
+            slippage_used,
+            slippage_bps
+        );
+    }
 
     // Wait a bit for transaction to settle
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -163,6 +178,7 @@ async fn test_titan_swap(
             aggregator: Aggregator::Titan,
             simulate: false,
         }),
+        slippage_bps: Some(slippage_bps),
         ..Default::default()
     };
 
@@ -173,6 +189,20 @@ async fn test_titan_swap(
     println!("  ✓ Swap back successful!");
     println!("  Transaction: {}", result_back.signature);
     println!("  Output Amount: {} lamports", result_back.out_amount);
+    if let Some(slippage_used) = result_back.slippage_bps_used {
+        println!(
+            "  Slippage Used: {} bps ({:.2}%)",
+            slippage_used,
+            slippage_used as f64 / 100.0
+        );
+        // Validate slippage used is <= slippage requested
+        assert!(
+            slippage_used <= slippage_bps,
+            "Slippage used ({}) should be <= slippage requested ({})",
+            slippage_used,
+            slippage_bps
+        );
+    }
 
     Ok(())
 }
@@ -183,7 +213,7 @@ async fn test_jupiter_swap(
     input: &str,
     output: &str,
     amount: u64,
-    _slippage_bps: u16,
+    slippage_bps: u16,
 ) -> Result<()> {
     println!("Swapping {} lamports of {} -> {}", amount, input, output);
 
@@ -192,6 +222,7 @@ async fn test_jupiter_swap(
             aggregator: Aggregator::Jupiter,
             simulate: false, // Direct swap
         }),
+        slippage_bps: Some(slippage_bps),
         ..Default::default()
     };
 
@@ -202,6 +233,20 @@ async fn test_jupiter_swap(
     println!("  ✓ Swap successful!");
     println!("  Transaction: {}", result.signature);
     println!("  Output Amount: {} lamports", result.out_amount);
+    if let Some(slippage_used) = result.slippage_bps_used {
+        println!(
+            "  Slippage Used: {} bps ({:.2}%)",
+            slippage_used,
+            slippage_used as f64 / 100.0
+        );
+        // Validate slippage used is <= slippage requested
+        assert!(
+            slippage_used <= slippage_bps,
+            "Slippage used ({}) should be <= slippage requested ({})",
+            slippage_used,
+            slippage_bps
+        );
+    }
 
     // Wait a bit for transaction to settle
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -213,6 +258,7 @@ async fn test_jupiter_swap(
             aggregator: Aggregator::Jupiter,
             simulate: false,
         }),
+        slippage_bps: Some(slippage_bps),
         ..Default::default()
     };
 
@@ -223,6 +269,20 @@ async fn test_jupiter_swap(
     println!("  ✓ Swap back successful!");
     println!("  Transaction: {}", result_back.signature);
     println!("  Output Amount: {} lamports", result_back.out_amount);
+    if let Some(slippage_used) = result_back.slippage_bps_used {
+        println!(
+            "  Slippage Used: {} bps ({:.2}%)",
+            slippage_used,
+            slippage_used as f64 / 100.0
+        );
+        // Validate slippage used is <= slippage requested
+        assert!(
+            slippage_used <= slippage_bps,
+            "Slippage used ({}) should be <= slippage requested ({})",
+            slippage_used,
+            slippage_bps
+        );
+    }
 
     Ok(())
 }
@@ -233,13 +293,14 @@ async fn test_best_price(
     input: &str,
     output: &str,
     amount: u64,
-    _slippage_bps: u16,
+    slippage_bps: u16,
 ) -> Result<()> {
     println!("Swapping {} lamports of {} -> {}", amount, input, output);
     println!("  Strategy: BestPrice (compares all aggregators)");
 
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::BestPrice),
+        slippage_bps: Some(slippage_bps),
         ..Default::default()
     };
 
@@ -250,6 +311,20 @@ async fn test_best_price(
     println!("  ✓ Swap successful!");
     println!("  Transaction: {}", result.signature);
     println!("  Output Amount: {} lamports", result.out_amount);
+    if let Some(slippage_used) = result.slippage_bps_used {
+        println!(
+            "  Slippage Used: {} bps ({:.2}%)",
+            slippage_used,
+            slippage_used as f64 / 100.0
+        );
+        // Validate slippage used is <= slippage requested
+        assert!(
+            slippage_used <= slippage_bps,
+            "Slippage used ({}) should be <= slippage requested ({})",
+            slippage_used,
+            slippage_bps
+        );
+    }
 
     // Wait a bit for transaction to settle
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -258,6 +333,7 @@ async fn test_best_price(
     println!("\n  Swapping back: {} -> {}", output, input);
     let route_config_back = RouteConfig {
         routing_strategy: Some(RoutingStrategy::BestPrice),
+        slippage_bps: Some(slippage_bps),
         ..Default::default()
     };
 
@@ -268,6 +344,20 @@ async fn test_best_price(
     println!("  ✓ Swap back successful!");
     println!("  Transaction: {}", result_back.signature);
     println!("  Output Amount: {} lamports", result_back.out_amount);
+    if let Some(slippage_used) = result_back.slippage_bps_used {
+        println!(
+            "  Slippage Used: {} bps ({:.2}%)",
+            slippage_used,
+            slippage_used as f64 / 100.0
+        );
+        // Validate slippage used is <= slippage requested
+        assert!(
+            slippage_used <= slippage_bps,
+            "Slippage used ({}) should be <= slippage requested ({})",
+            slippage_used,
+            slippage_bps
+        );
+    }
 
     Ok(())
 }
@@ -291,6 +381,9 @@ async fn test_staircase(
         ..Default::default()
     };
 
+    let floor_slippage_bps = 10;
+    let max_slippage_bps = 100;
+
     let result = client
         .swap_with_route_config(input, output, amount, route_config)
         .await?;
@@ -298,6 +391,21 @@ async fn test_staircase(
     println!("  ✓ Swap successful!");
     println!("  Transaction: {}", result.signature);
     println!("  Output Amount: {} lamports", result.out_amount);
+    if let Some(slippage_used) = result.slippage_bps_used {
+        println!(
+            "  Slippage Used: {} bps ({:.2}%)",
+            slippage_used,
+            slippage_used as f64 / 100.0
+        );
+        // Validate slippage used is within the expected range
+        assert!(
+            slippage_used >= floor_slippage_bps && slippage_used <= max_slippage_bps,
+            "Slippage used ({}) should be between {} and {} bps",
+            slippage_used,
+            floor_slippage_bps,
+            max_slippage_bps
+        );
+    }
 
     // Wait a bit for transaction to settle
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -320,6 +428,21 @@ async fn test_staircase(
     println!("  ✓ Swap back successful!");
     println!("  Transaction: {}", result_back.signature);
     println!("  Output Amount: {} lamports", result_back.out_amount);
+    if let Some(slippage_used) = result_back.slippage_bps_used {
+        println!(
+            "  Slippage Used: {} bps ({:.2}%)",
+            slippage_used,
+            slippage_used as f64 / 100.0
+        );
+        // Validate slippage used is within the expected range
+        assert!(
+            slippage_used >= floor_slippage_bps && slippage_used <= max_slippage_bps,
+            "Slippage used ({}) should be between {} and {} bps",
+            slippage_used,
+            floor_slippage_bps,
+            max_slippage_bps
+        );
+    }
 
     Ok(())
 }
