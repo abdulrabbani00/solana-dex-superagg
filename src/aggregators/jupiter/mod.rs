@@ -116,7 +116,7 @@ impl DexAggregator for JupiterAggregator {
 
         let out_amount = quote_response.out_amount;
         let swap_config = TransactionConfig {
-            wrap_and_unwrap_sol: false,
+            wrap_and_unwrap_sol: true,
             compute_unit_price_micro_lamports: if self.compute_unit_price_micro_lamports > 0 {
                 Some(ComputeUnitPriceMicroLamports::MicroLamports(
                     self.compute_unit_price_micro_lamports,
@@ -127,7 +127,6 @@ impl DexAggregator for JupiterAggregator {
             ..Default::default()
         };
 
-        // Match eva01 exactly - use signer.pubkey() directly (solana_program::pubkey::Pubkey)
         let user_pubkey = self.signer.pubkey();
 
         let swap_response = self
@@ -146,7 +145,6 @@ impl DexAggregator for JupiterAggregator {
         let mut tx = bincode::deserialize::<VersionedTransaction>(&swap_response.swap_transaction)
             .map_err(|e| anyhow!("Failed to deserialize transaction: {}", e))?;
 
-        // Sign transaction - match eva01 pattern but preserve transaction structure
         tx = VersionedTransaction::try_new(tx.message, &[self.signer.as_ref()])
             .map_err(|e| anyhow!("Failed to sign transaction: {}", e))?;
 

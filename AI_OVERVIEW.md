@@ -129,7 +129,7 @@ DEX_SUPERAGG_SHARED__WALLET_KEYPAIR=<base58_keypair>
 DEX_SUPERAGG_SHARED__COMPUTE_UNIT_PRICE_MICRO_LAMPORTS=0
 
 # Jupiter configuration
-DEX_SUPERAGG_JUPITER__JUP_SWAP_API_URL=https://api.jup.ag
+DEX_SUPERAGG_JUPITER__JUP_SWAP_API_URL=https://api.jup.ag/swap/v1
 
 # Titan configuration (optional)
 DEX_SUPERAGG_TITAN__TITAN_WS_ENDPOINT=us1.api.demo.titan.exchange

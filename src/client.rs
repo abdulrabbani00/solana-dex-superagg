@@ -1,11 +1,19 @@
 use crate::aggregators::{
     jupiter::JupiterAggregator, titan::TitanAggregator, DexAggregator, SwapResult,
 };
-use crate::config::{Aggregator, ClientConfig, RouteConfig, RoutingStrategy};
+use crate::config::{Aggregator, ClientConfig, OutputAtaBehavior, RouteConfig, RoutingStrategy};
 use anyhow::{anyhow, Result};
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
+use solana_sdk::program_pack::Pack;
+use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
+use solana_sdk::transaction::Transaction;
+use spl_associated_token_account::{
+    get_associated_token_address, instruction::create_associated_token_account_idempotent,
+};
+use spl_token::state::Mint;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -92,6 +100,99 @@ impl DexSuperAggClient {
         Ok(())
     }
 
+    /// Create an Associated Token Account (ATA) for the given mint if it doesn't exist
+    ///
+    /// # Arguments
+    /// * `mint` - Token mint address (as string)
+    ///
+    /// # Returns
+    /// `Ok(())` if the ATA exists or was successfully created, `Err` otherwise
+    ///
+    /// # Note
+    /// This function skips ATA creation for native SOL (So11111111111111111111111111111111111111112)
+    /// because native SOL doesn't use token accounts - it uses the native account balance.
+    async fn create_ata_if_needed(&self, mint: &str) -> Result<()> {
+        let mint_pubkey =
+            Pubkey::from_str(mint).map_err(|e| anyhow!("Invalid mint address: {}", e))?;
+
+        // Native SOL mint address - skip ATA creation for native SOL
+        // Native SOL doesn't use token accounts, it uses the native account balance
+        const NATIVE_SOL_MINT: &str = "So11111111111111111111111111111111111111112";
+        let native_sol_mint = Pubkey::from_str(NATIVE_SOL_MINT)
+            .map_err(|e| anyhow!("Failed to parse native SOL mint: {}", e))?;
+
+        if mint_pubkey == native_sol_mint {
+            // Native SOL doesn't need an ATA - it uses the native account balance
+            return Ok(());
+        }
+
+        let owner_pubkey = self.signer.pubkey();
+
+        // Get the ATA address
+        let ata_address = get_associated_token_address(&owner_pubkey, &mint_pubkey);
+
+        // Check if the ATA already exists
+        match self.rpc_client.get_account(&ata_address) {
+            Ok(_) => {
+                // ATA already exists, nothing to do
+                return Ok(());
+            }
+            Err(_) => {
+                // ATA doesn't exist, need to create it
+            }
+        }
+
+        // Get the mint account to determine the token program ID
+        let mint_account = self
+            .rpc_client
+            .get_account(&mint_pubkey)
+            .map_err(|e| anyhow!("Failed to get mint account: {}", e))?;
+
+        // Parse the mint account to validate it's a valid mint (and get token program ID)
+        let _mint_data = Mint::unpack(&mint_account.data)
+            .map_err(|e| anyhow!("Failed to parse mint account: {}", e))?;
+        let token_program_id = mint_account.owner;
+
+        // Create the ATA instruction (idempotent - safe to call even if it exists)
+        let create_ata_ix = create_associated_token_account_idempotent(
+            &owner_pubkey,     // payer
+            &owner_pubkey,     // owner
+            &mint_pubkey,      // mint
+            &token_program_id, // token program
+        );
+
+        // Build and send the transaction
+        let recent_blockhash = self
+            .rpc_client
+            .get_latest_blockhash()
+            .map_err(|e| anyhow!("Failed to get recent blockhash: {}", e))?;
+
+        let mut transaction = Transaction::new_with_payer(&[create_ata_ix], Some(&owner_pubkey));
+        transaction.sign(&[self.signer.as_ref()], recent_blockhash);
+
+        // Send and confirm the transaction
+        let sig = self
+            .rpc_client
+            .send_and_confirm_transaction_with_spinner(&transaction)
+            .map_err(|e| anyhow!("Failed to create ATA: {}", e))?;
+
+        // Wait a bit to ensure the ATA is fully available before proceeding
+        // This helps avoid race conditions where the swap transaction is sent
+        // before the ATA creation is fully processed
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+        // Verify the ATA was actually created
+        self.rpc_client.get_account(&ata_address).map_err(|e| {
+            anyhow!(
+                "ATA creation confirmed but account not found: {} (tx: {})",
+                e,
+                sig
+            )
+        })?;
+
+        Ok(())
+    }
+
     /// Execute a swap using default routing configuration
     ///
     /// # Arguments
@@ -124,6 +225,7 @@ impl DexSuperAggClient {
     /// - Compute unit price
     /// - Routing strategy (which aggregator to use)
     /// - Retry behavior
+    /// - Output ATA creation behavior
     pub async fn swap_with_route_config(
         &self,
         input: &str,
@@ -132,6 +234,18 @@ impl DexSuperAggClient {
         route_config: RouteConfig,
     ) -> Result<SwapResult> {
         let slippage_bps = self.config.shared.slippage_bps;
+
+        // Handle output ATA creation based on route config
+        match route_config.output_ata {
+            OutputAtaBehavior::Create => {
+                // Create the output ATA if it doesn't exist
+                self.create_ata_if_needed(output).await?;
+            }
+            OutputAtaBehavior::Ignore => {
+                // Let the aggregator handle ATA creation
+                // Nothing to do here
+            }
+        }
 
         // Determine which aggregator(s) to use based on routing strategy
         match &route_config.routing_strategy {

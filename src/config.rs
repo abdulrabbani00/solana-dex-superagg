@@ -46,6 +46,22 @@ pub enum RoutingStrategy {
     },
 }
 
+/// Behavior for handling output Associated Token Account (ATA) creation
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputAtaBehavior {
+    /// Create the ATA if it doesn't exist before executing the swap
+    Create,
+    /// Ignore ATA creation (let the aggregator handle it)
+    Ignore,
+}
+
+impl Default for OutputAtaBehavior {
+    fn default() -> Self {
+        Self::Create
+    }
+}
+
 /// Custom deserializer for wallet_keypair that accepts both strings and sequences
 ///
 /// When figment parses a JSON array string like "[1,2,3,...]", it treats it as a sequence.
@@ -166,7 +182,7 @@ pub struct JupiterConfig {
 impl Default for JupiterConfig {
     fn default() -> Self {
         Self {
-            jup_swap_api_url: "https://api.jup.ag".to_string(),
+            jup_swap_api_url: "https://api.jup.ag/swap/v1".to_string(),
             api_key: None,
         }
     }
@@ -206,6 +222,9 @@ pub struct RouteConfig {
     pub routing_strategy: Option<RoutingStrategy>,
     /// Number of times to retry transaction landing/submission for LowestSlippageClimber strategy
     pub retry_tx_landing: u32,
+    /// Behavior for handling output Associated Token Account (ATA) creation
+    #[serde(default)]
+    pub output_ata: OutputAtaBehavior,
 }
 
 impl Default for RouteConfig {
@@ -214,6 +233,7 @@ impl Default for RouteConfig {
             compute_unit_price_micro_lamports: 0,
             routing_strategy: Some(RoutingStrategy::BestPrice), // Default to best price strategy
             retry_tx_landing: 3,
+            output_ata: OutputAtaBehavior::Create, // Default to creating the ATA
         }
     }
 }
@@ -224,6 +244,7 @@ impl From<&SharedConfig> for RouteConfig {
             compute_unit_price_micro_lamports: shared.compute_unit_price_micro_lamports,
             routing_strategy: shared.routing_strategy.clone(),
             retry_tx_landing: shared.retry_tx_landing,
+            output_ata: OutputAtaBehavior::Create, // Default to creating the ATA
         }
     }
 }
@@ -885,7 +906,7 @@ mod tests {
         let mut config = ClientConfig::default();
         config.shared.rpc_url = "https://api.mainnet-beta.solana.com".to_string();
         config.shared.wallet_keypair = Some(base58_keypair);
-        config.jupiter.jup_swap_api_url = "https://api.jup.ag".to_string();
+        config.jupiter.jup_swap_api_url = "https://api.jup.ag/swap/v1".to_string();
 
         let result = config.validate().await;
 
@@ -900,7 +921,7 @@ mod tests {
         let mut config = ClientConfig::default();
         config.shared.rpc_url = "https://api.mainnet-beta.solana.com".to_string();
         config.shared.wallet_keypair = Some("invalid_keypair".to_string());
-        config.jupiter.jup_swap_api_url = "https://api.jup.ag".to_string();
+        config.jupiter.jup_swap_api_url = "https://api.jup.ag/swap/v1".to_string();
 
         let result = config.validate().await;
 
@@ -915,7 +936,7 @@ mod tests {
         // Test with a real Solana RPC endpoint
         let mut config = ClientConfig::default();
         config.shared.rpc_url = "https://api.mainnet-beta.solana.com".to_string();
-        config.jupiter.jup_swap_api_url = "https://api.jup.ag".to_string();
+        config.jupiter.jup_swap_api_url = "https://api.jup.ag/swap/v1".to_string();
 
         let result = config.validate().await;
 
@@ -933,7 +954,7 @@ mod tests {
     async fn test_validate_jupiter_endpoint() {
         let mut config = ClientConfig::default();
         config.shared.rpc_url = "https://api.mainnet-beta.solana.com".to_string();
-        config.jupiter.jup_swap_api_url = "https://api.jup.ag".to_string();
+        config.jupiter.jup_swap_api_url = "https://api.jup.ag/swap/v1".to_string();
 
         let result = config.validate().await;
 
