@@ -4,9 +4,10 @@
 use reqwest::Client;
 use serde_json::{json, Value};
 use solana_sdk::{
+    address_lookup_table::AddressLookupTableAccount,
     hash::Hash,
     instruction::{AccountMeta as SolanaAccountMeta, Instruction as SolanaInstruction},
-    message::{v0, AddressLookupTableAccount, VersionedMessage},
+    message::{v0, VersionedMessage},
     pubkey::Pubkey as SolanaPubkey,
     signature::Signature as SolanaSignature,
     transaction::VersionedTransaction,
@@ -121,7 +122,10 @@ fn parse_lookup_table_addresses(data: &[u8]) -> Result<Vec<SolanaPubkey>, String
         let address_bytes: [u8; 32] = addresses_data[start..end]
             .try_into()
             .map_err(|_| "Invalid address bytes".to_string())?;
-        addresses.push(SolanaPubkey::new_from_array(address_bytes));
+        addresses.push(
+            SolanaPubkey::try_from(&address_bytes[..])
+                .map_err(|_| "Invalid pubkey bytes".to_string())?,
+        );
     }
 
     Ok(addresses)

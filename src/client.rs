@@ -3,7 +3,8 @@ use crate::aggregators::{
 };
 use crate::config::{Aggregator, ClientConfig, RouteConfig, RoutingStrategy};
 use anyhow::{anyhow, Result};
-use solana_client::{rpc_client::RpcClient, rpc_config::CommitmentConfig};
+use solana_client::rpc_client::RpcClient;
+use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::signature::{Keypair, Signer};
 use std::sync::Arc;
 use tokio::sync::Mutex;

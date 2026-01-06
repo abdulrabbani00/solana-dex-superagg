@@ -1,7 +1,7 @@
 use figment::{providers::Env, Figment};
 use serde::{Deserialize, Serialize};
-use solana_client::{rpc_client::RpcClient, rpc_config::CommitmentConfig};
-use solana_sdk::signature::Keypair;
+use solana_client::rpc_client::RpcClient;
+use solana_sdk::{commitment_config::CommitmentConfig, signature::Keypair};
 use std::time::Duration;
 use tokio::time::timeout;
 
@@ -159,15 +159,15 @@ pub struct JupiterConfig {
     /// 1. Wait for the crate to add API key support
     /// 2. Fork/wrap the crate to add x-api-key header support
     ///
-    /// Environment variable: `DEX_SUPERAGG_JUPITER__JUPITER_API_KEY`
-    pub jupiter_api_key: Option<String>,
+    /// Environment variable: `DEX_SUPERAGG_JUPITER__API_KEY`
+    pub api_key: Option<String>,
 }
 
 impl Default for JupiterConfig {
     fn default() -> Self {
         Self {
             jup_swap_api_url: "https://api.jup.ag".to_string(),
-            jupiter_api_key: None,
+            api_key: None,
         }
     }
 }
@@ -525,21 +525,14 @@ impl ClientConfig {
             None => return Ok(None),
         };
 
-        // Try parsing as base58 string first
-        if let Ok(bytes) = bs58::decode(wallet_keypair).into_vec() {
-            if bytes.len() == 64 {
-                let mut secret_key = [0u8; 32];
-                secret_key.copy_from_slice(&bytes[..32]);
-                let keypair = Keypair::new_from_array(secret_key);
-                return Ok(Some(keypair));
-            }
-        }
-
-        // Try parsing as bytes (comma-separated or JSON array)
+        // Match eva01 exactly: parse as JSON array (Vec<u8>), then use Keypair::from_bytes with full 64 bytes
         let bytes: Vec<u8> = if wallet_keypair.starts_with('[') {
-            // JSON array format
+            // JSON array format (like eva01 uses)
             serde_json::from_str(wallet_keypair)
                 .map_err(|e| anyhow::anyhow!("Failed to parse wallet keypair as JSON: {}", e))?
+        } else if let Ok(decoded) = bs58::decode(wallet_keypair).into_vec() {
+            // Base58 format - convert to Vec<u8>
+            decoded
         } else if wallet_keypair.contains(',') {
             // Comma-separated format
             wallet_keypair
@@ -560,9 +553,9 @@ impl ClientConfig {
             ));
         }
 
-        let mut secret_key = [0u8; 32];
-        secret_key.copy_from_slice(&bytes[..32]);
-        let keypair = Keypair::new_from_array(secret_key);
+        // Match eva01 exactly: Keypair::from_bytes expects full 64-byte keypair (32 secret + 32 public)
+        let keypair = Keypair::from_bytes(&bytes)
+            .map_err(|e| anyhow::anyhow!("Failed to create keypair from bytes: {}", e))?;
         Ok(Some(keypair))
     }
 }

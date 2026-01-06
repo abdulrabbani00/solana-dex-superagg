@@ -3,16 +3,6 @@
 use solana_sdk::pubkey::Pubkey as SolanaPubkey;
 use std::str::FromStr;
 
-/// Convert Solana Pubkey to 32-byte array for MessagePack encoding
-pub fn pubkey_to_bytes(pubkey: &SolanaPubkey) -> [u8; 32] {
-    pubkey.to_bytes()
-}
-
-/// Convert 32-byte array to Solana Pubkey
-pub fn bytes_to_pubkey(bytes: &[u8; 32]) -> SolanaPubkey {
-    SolanaPubkey::new_from_array(*bytes)
-}
-
 /// Convert base58 string to 32-byte array for MessagePack encoding
 pub fn base58_to_bytes(base58: &str) -> Result<[u8; 32], String> {
     let pubkey =
@@ -21,8 +11,9 @@ pub fn base58_to_bytes(base58: &str) -> Result<[u8; 32], String> {
 }
 
 /// Convert 32-byte array to base58 string
+#[allow(dead_code)]
 pub fn bytes_to_base58(bytes: &[u8; 32]) -> String {
-    let pubkey = SolanaPubkey::new_from_array(*bytes);
+    let pubkey = SolanaPubkey::try_from(bytes.as_slice()).unwrap();
     pubkey.to_string()
 }
 
