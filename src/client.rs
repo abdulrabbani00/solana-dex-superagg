@@ -1,5 +1,5 @@
 use crate::aggregators::{
-    jupiter::JupiterAggregator, titan::TitanAggregator, DexAggregator, SwapResult,
+    jupiter::JupiterAggregator, titan::TitanAggregator, DexAggregator, SwapResult, SwapSummary,
 };
 use crate::config::{Aggregator, ClientConfig, OutputAtaBehavior, RouteConfig, RoutingStrategy};
 use anyhow::{anyhow, Result};
@@ -201,10 +201,10 @@ impl DexSuperAggClient {
     /// * `amount` - Input amount in lamports/base units
     ///
     /// # Returns
-    /// `SwapResult` containing the transaction signature and output amount
+    /// `SwapSummary` containing the swap result and all simulation results
     ///
     /// Uses the default routing strategy from the client configuration.
-    pub async fn swap(&self, input: &str, output: &str, amount: u64) -> Result<SwapResult> {
+    pub async fn swap(&self, input: &str, output: &str, amount: u64) -> Result<SwapSummary> {
         let route_config = self.config.default_route_config();
         self.swap_with_route_config(input, output, amount, route_config)
             .await
@@ -219,7 +219,7 @@ impl DexSuperAggClient {
     /// * `route_config` - Route configuration for this swap
     ///
     /// # Returns
-    /// `SwapResult` containing the transaction signature and output amount
+    /// `SwapSummary` containing the swap result and all simulation results
     ///
     /// The route configuration allows per-swap customization of:
     /// - Compute unit price
@@ -232,7 +232,7 @@ impl DexSuperAggClient {
         output: &str,
         amount: u64,
         route_config: RouteConfig,
-    ) -> Result<SwapResult> {
+    ) -> Result<SwapSummary> {
         // Use slippage from route config if provided, otherwise use config default
         let slippage_bps = route_config
             .slippage_bps
@@ -274,15 +274,20 @@ impl DexSuperAggClient {
                     .await
                 } else {
                     // Direct swap without simulation
-                    self.swap_direct(
-                        input,
-                        output,
-                        amount,
-                        slippage_bps,
-                        aggregator,
-                        &route_config,
-                    )
-                    .await
+                    let swap_result = self
+                        .swap_direct(
+                            input,
+                            output,
+                            amount,
+                            slippage_bps,
+                            aggregator,
+                            &route_config,
+                        )
+                        .await?;
+                    Ok(SwapSummary {
+                        swap_result,
+                        sim_results: Vec::new(),
+                    })
                 }
             }
             Some(RoutingStrategy::LowestSlippageClimber {
@@ -347,43 +352,49 @@ impl DexSuperAggClient {
         slippage_bps: u16,
         aggregator: &Aggregator,
         route_config: &RouteConfig,
-    ) -> Result<SwapResult> {
+    ) -> Result<SwapSummary> {
         // Simulate first to validate the swap
-        match aggregator {
+        let sim_result = match aggregator {
             Aggregator::Jupiter => {
                 let jupiter = JupiterAggregator::new_with_compute_price(
                     &self.config,
                     Arc::clone(&self.signer),
                     route_config.compute_unit_price_micro_lamports,
                 )?;
-                let _simulate_result = jupiter
+                jupiter
                     .simulate(input, output, amount, slippage_bps)
-                    .await?;
+                    .await?
             }
             Aggregator::Titan => {
                 // Reuse existing Titan aggregator to avoid opening new WebSocket connections
                 let titan = self.get_titan_aggregator().await?;
-                let _simulate_result = titan.simulate(input, output, amount, slippage_bps).await?;
+                titan.simulate(input, output, amount, slippage_bps).await?
             }
-        }
+        };
 
         // Then execute the swap
-        self.swap_direct(
-            input,
-            output,
-            amount,
-            slippage_bps,
-            aggregator,
-            route_config,
-        )
-        .await
+        let swap_result = self
+            .swap_direct(
+                input,
+                output,
+                amount,
+                slippage_bps,
+                aggregator,
+                route_config,
+            )
+            .await?;
+
+        Ok(SwapSummary {
+            swap_result,
+            sim_results: vec![(*aggregator, sim_result)],
+        })
     }
 
     /// Execute swap using lowest slippage climber strategy
     ///
     /// This strategy tries multiple slippage levels starting from `floor_slippage_bps`
     /// and incrementing by `step_bps` until a swap succeeds or `max_slippage_bps` is reached.
-    /// The returned `SwapResult` includes `slippage_bps_used` to show which slippage level succeeded.
+    /// The returned `SwapSummary` includes `slippage_bps_used` to show which slippage level succeeded.
     ///
     /// This function will log warnings if slippage climbs higher than the floor, indicating
     /// that the swap required more slippage tolerance than initially expected.
@@ -396,7 +407,7 @@ impl DexSuperAggClient {
         max_slippage_bps: u16,
         step_bps: u16,
         route_config: &RouteConfig,
-    ) -> Result<SwapResult> {
+    ) -> Result<SwapSummary> {
         // Try each slippage level starting from floor
         let mut current_slippage = floor_slippage_bps;
         let mut last_error = None;
@@ -421,16 +432,19 @@ impl DexSuperAggClient {
                 .swap_best_price(input, output, amount, current_slippage, route_config)
                 .await
             {
-                Ok(mut result) => {
+                Ok(mut summary) => {
                     // Ensure slippage_bps_used is set (should already be set by aggregators, but ensure it)
-                    if result.slippage_bps_used.is_none() {
-                        result.slippage_bps_used = Some(current_slippage);
+                    if summary.swap_result.slippage_bps_used.is_none() {
+                        summary.swap_result.slippage_bps_used = Some(current_slippage);
                     }
 
-                    let slippage_used = result.slippage_bps_used.unwrap_or(current_slippage);
+                    let slippage_used = summary
+                        .swap_result
+                        .slippage_bps_used
+                        .unwrap_or(current_slippage);
 
                     // Show aggregator used
-                    if let Some(agg) = &result.aggregator_used {
+                    if let Some(agg) = &summary.swap_result.aggregator_used {
                         let agg_name = match agg {
                             Aggregator::Jupiter => "Jupiter",
                             Aggregator::Titan => "Titan",
@@ -466,7 +480,7 @@ impl DexSuperAggClient {
                         );
                     }
 
-                    return Ok(result);
+                    return Ok(summary);
                 }
                 Err(e) => {
                     println!("  ✗ Failed at {} bps: {}", current_slippage, e);
@@ -498,9 +512,10 @@ impl DexSuperAggClient {
         amount: u64,
         slippage_bps: u16,
         route_config: &RouteConfig,
-    ) -> Result<SwapResult> {
+    ) -> Result<SwapSummary> {
         // Simulate both aggregators to compare output amounts
-        let mut results = Vec::new();
+        let mut sim_results = Vec::new();
+        let mut comparison_results = Vec::new();
 
         // Jupiter simulation
         if let Ok(jupiter) = JupiterAggregator::new_with_compute_price(
@@ -509,7 +524,8 @@ impl DexSuperAggClient {
             route_config.compute_unit_price_micro_lamports,
         ) {
             if let Ok(sim_result) = jupiter.simulate(input, output, amount, slippage_bps).await {
-                results.push((Aggregator::Jupiter, sim_result.out_amount));
+                sim_results.push((Aggregator::Jupiter, sim_result.clone()));
+                comparison_results.push((Aggregator::Jupiter, sim_result.out_amount));
             }
         }
 
@@ -517,23 +533,24 @@ impl DexSuperAggClient {
         if self.config.is_titan_configured() {
             if let Ok(titan) = self.get_titan_aggregator().await {
                 if let Ok(sim_result) = titan.simulate(input, output, amount, slippage_bps).await {
-                    results.push((Aggregator::Titan, sim_result.out_amount));
+                    sim_results.push((Aggregator::Titan, sim_result.clone()));
+                    comparison_results.push((Aggregator::Titan, sim_result.out_amount));
                 }
             }
         }
 
-        if results.is_empty() {
+        if comparison_results.is_empty() {
             return Err(anyhow!("No aggregators available for swap"));
         }
 
         // Find aggregator with highest output amount (most tokens = best price)
-        let (best_aggregator, best_out_amount) = results
+        let (best_aggregator, best_out_amount) = comparison_results
             .iter()
             .max_by_key(|(_, out_amount)| out_amount)
             .ok_or_else(|| anyhow!("Failed to determine best aggregator"))?;
 
         println!("  Comparing aggregators:");
-        for (agg, out_amt) in &results {
+        for (agg, out_amt) in &comparison_results {
             let agg_name = match agg {
                 Aggregator::Jupiter => "Jupiter",
                 Aggregator::Titan => "Titan",
@@ -550,15 +567,21 @@ impl DexSuperAggClient {
         );
 
         // Execute swap with aggregator that gives the most tokens
-        self.swap_direct(
-            input,
-            output,
-            amount,
-            slippage_bps,
-            best_aggregator,
-            route_config,
-        )
-        .await
+        let swap_result = self
+            .swap_direct(
+                input,
+                output,
+                amount,
+                slippage_bps,
+                best_aggregator,
+                route_config,
+            )
+            .await?;
+
+        Ok(SwapSummary {
+            swap_result,
+            sim_results,
+        })
     }
 }
 

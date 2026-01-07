@@ -16,6 +16,7 @@ use solana_sdk::{
     transaction::VersionedTransaction,
 };
 use std::sync::Arc;
+use std::time::Instant;
 
 pub use client::TitanClient;
 pub use types::SwapRoute;
@@ -133,6 +134,8 @@ impl DexAggregator for TitanAggregator {
         amount: u64,
         slippage_bps: u16,
     ) -> Result<SwapResult> {
+        let start_time = Instant::now();
+
         let user_pubkey = self.signer.as_ref().pubkey().to_string();
 
         // Request swap quotes with slippage
@@ -175,11 +178,14 @@ impl DexAggregator for TitanAggregator {
             .send_and_confirm_transaction(&transaction)
             .map_err(|e| anyhow!("Failed to send transaction: {}", e))?;
 
+        let execution_time = start_time.elapsed();
+
         Ok(SwapResult {
             signature: tx_signature.to_string(),
             out_amount: route.out_amount,
             slippage_bps_used: Some(slippage_bps),
             aggregator_used: Some(crate::config::Aggregator::Titan),
+            execution_time: Some(execution_time),
         })
     }
 
@@ -190,6 +196,8 @@ impl DexAggregator for TitanAggregator {
         amount: u64,
         slippage_bps: u16,
     ) -> Result<SimulateResult> {
+        let start_time = Instant::now();
+
         let user_pubkey = self.signer.as_ref().pubkey().to_string();
 
         // Request swap quotes with slippage (simulation doesn't execute)
@@ -198,6 +206,8 @@ impl DexAggregator for TitanAggregator {
             .request_swap_quotes(input, output, amount, &user_pubkey, Some(slippage_bps))
             .await
             .map_err(|e| anyhow!("Failed to get swap quotes: {}", e))?;
+
+        let sim_time = start_time.elapsed();
 
         // Calculate price impact (simplified: compare in_amount vs out_amount)
         // This is a rough estimate - actual price impact would require more market data
@@ -218,6 +228,7 @@ impl DexAggregator for TitanAggregator {
                 fees: route.platform_fee.as_ref().map(|f| f.amount),
                 extra: None,
             },
+            sim_time: Some(sim_time),
         })
     }
 }

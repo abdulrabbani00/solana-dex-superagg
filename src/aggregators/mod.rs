@@ -6,6 +6,7 @@
 use crate::config::Aggregator;
 use anyhow::Result;
 use async_trait::async_trait;
+use std::time::Duration;
 
 /// Result of a swap operation
 #[derive(Debug, Clone)]
@@ -20,6 +21,8 @@ pub struct SwapResult {
     /// Aggregator that was used for this swap (Jupiter or Titan)
     /// This is particularly useful for BestPrice and LowestSlippageClimber strategies to see which aggregator was selected
     pub aggregator_used: Option<Aggregator>,
+    /// Time taken to execute the swap
+    pub execution_time: Option<Duration>,
 }
 
 /// Result of a simulation/quote operation
@@ -31,6 +34,8 @@ pub struct SimulateResult {
     pub price_impact: f64,
     /// Other quote metadata (can be extended with more fields)
     pub metadata: QuoteMetadata,
+    /// Time taken for simulation
+    pub sim_time: Option<Duration>,
 }
 
 /// Additional metadata from quote/simulation
@@ -42,6 +47,16 @@ pub struct QuoteMetadata {
     pub fees: Option<u64>,
     /// Other aggregator-specific data
     pub extra: Option<serde_json::Value>,
+}
+
+/// Summary of swap operations including swap result and all simulations performed
+#[derive(Debug, Clone)]
+pub struct SwapSummary {
+    /// The swap result (always present when a swap was executed)
+    pub swap_result: SwapResult,
+    /// All simulation results that were performed, keyed by aggregator
+    /// This allows capturing simulations for all aggregators (e.g., in BestPrice strategy)
+    pub sim_results: Vec<(Aggregator, SimulateResult)>,
 }
 
 /// Trait that all DEX aggregators must implement
