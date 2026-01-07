@@ -22,9 +22,10 @@
 
 use anyhow::Result;
 use solana_dex_superagg::{
-    client::DexSuperAggClient, config::Aggregator, config::ClientConfig, config::RouteConfig,
-    config::RoutingStrategy,
+    aggregators::SimulateResult, client::DexSuperAggClient, config::Aggregator,
+    config::ClientConfig, config::RouteConfig, config::RoutingStrategy,
 };
+use std::time::Duration;
 
 /// Token addresses
 const SOL_TOKEN: &str = "So11111111111111111111111111111111111111112";
@@ -36,6 +37,44 @@ fn usd_to_sol_lamports(usd_amount: f64) -> u64 {
     // Approximate: 1 SOL = $100, so 0.01 USD = 0.0001 SOL = 100,000 lamports
     // Formula: (usd_amount / 100.0) * 1_000_000_000 lamports per SOL
     (usd_amount / 100.0 * 1_000_000_000.0) as u64
+}
+
+struct AggregatorTimings {
+    jupiter_sim: Option<Duration>,
+    titan_sim: Option<Duration>,
+    jupiter_exec: Option<Duration>,
+    titan_exec: Option<Duration>,
+}
+
+/// Timing summary for a test
+#[derive(Default)]
+struct TestTimingSummary {
+    titan_forward: Option<(Option<Duration>, Option<Duration>)>, // (sim_time, exec_time)
+    titan_back: Option<(Option<Duration>, Option<Duration>)>,
+    jupiter_forward: Option<(Option<Duration>, Option<Duration>)>,
+    jupiter_back: Option<(Option<Duration>, Option<Duration>)>,
+    best_price_forward: Option<AggregatorTimings>,
+    best_price_back: Option<AggregatorTimings>,
+    staircase_forward: Option<AggregatorTimings>,
+    staircase_back: Option<AggregatorTimings>,
+}
+
+fn format_duration_ms(d: Option<Duration>) -> String {
+    match d {
+        Some(dur) => format!("{:.2} ms", dur.as_secs_f64() * 1000.0),
+        None => "N/A".to_string(),
+    }
+}
+
+fn extract_timing_from_sim_results(
+    sim_results: &[(Aggregator, SimulateResult)],
+    aggregator: Aggregator,
+) -> Option<Duration> {
+    sim_results
+        .iter()
+        .find(|(agg, _)| *agg == aggregator)
+        .map(|(_, sim)| sim.sim_time)
+        .flatten()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -88,10 +127,20 @@ async fn test_all_swap_methods() -> Result<()> {
     println!("  Input Amount: {} SOL lamports", sol_amount);
     println!();
 
+    let mut timing_summary = TestTimingSummary::default();
+
     // Test 1: Simple Titan Swap
     if client.config().is_titan_configured() {
         println!("=== Test 1: Simple Titan Swap ===");
-        test_titan_swap(&client, SOL_TOKEN, USDC_TOKEN, sol_amount, slippage_bps).await?;
+        test_titan_swap(
+            &client,
+            SOL_TOKEN,
+            USDC_TOKEN,
+            sol_amount,
+            slippage_bps,
+            &mut timing_summary,
+        )
+        .await?;
         println!();
     } else {
         println!("=== Test 1: Simple Titan Swap ===");
@@ -100,13 +149,29 @@ async fn test_all_swap_methods() -> Result<()> {
 
     // Test 2: Simple Jupiter Swap
     println!("=== Test 2: Simple Jupiter Swap ===");
-    test_jupiter_swap(&client, SOL_TOKEN, USDC_TOKEN, sol_amount, slippage_bps).await?;
+    test_jupiter_swap(
+        &client,
+        SOL_TOKEN,
+        USDC_TOKEN,
+        sol_amount,
+        slippage_bps,
+        &mut timing_summary,
+    )
+    .await?;
     println!();
 
     // Test 3: Best Price (compares both aggregators)
     if client.config().is_titan_configured() {
         println!("=== Test 3: Best Price Strategy ===");
-        test_best_price(&client, SOL_TOKEN, USDC_TOKEN, sol_amount, slippage_bps).await?;
+        test_best_price(
+            &client,
+            SOL_TOKEN,
+            USDC_TOKEN,
+            sol_amount,
+            slippage_bps,
+            &mut timing_summary,
+        )
+        .await?;
         println!();
     } else {
         println!("=== Test 3: Best Price Strategy ===");
@@ -116,11 +181,134 @@ async fn test_all_swap_methods() -> Result<()> {
     // Test 4: Staircase (LowestSlippageClimber)
     if client.config().is_titan_configured() {
         println!("=== Test 4: Staircase Strategy (LowestSlippageClimber) ===");
-        test_staircase(&client, SOL_TOKEN, USDC_TOKEN, sol_amount).await?;
+        test_staircase(
+            &client,
+            SOL_TOKEN,
+            USDC_TOKEN,
+            sol_amount,
+            &mut timing_summary,
+        )
+        .await?;
         println!();
     } else {
         println!("=== Test 4: Staircase Strategy ===");
         println!("⚠ Skipped: Titan not configured (requires both aggregators)\n");
+    }
+
+    // Print timing summary
+    println!("=== Timing Summary ===");
+    println!();
+
+    if let Some((sim, exec)) = timing_summary.titan_forward {
+        println!("Titan Swap (Forward):");
+        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Execution: {}", format_duration_ms(exec));
+        println!();
+    }
+
+    if let Some((sim, exec)) = timing_summary.titan_back {
+        println!("Titan Swap (Back):");
+        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Execution: {}", format_duration_ms(exec));
+        println!();
+    }
+
+    if let Some((sim, exec)) = timing_summary.jupiter_forward {
+        println!("Jupiter Swap (Forward):");
+        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Execution: {}", format_duration_ms(exec));
+        println!();
+    }
+
+    if let Some((sim, exec)) = timing_summary.jupiter_back {
+        println!("Jupiter Swap (Back):");
+        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Execution: {}", format_duration_ms(exec));
+        println!();
+    }
+
+    if let Some(timings) = timing_summary.best_price_forward {
+        println!("Best Price Strategy (Forward):");
+        println!(
+            "  Jupiter Simulation: {}",
+            format_duration_ms(timings.jupiter_sim)
+        );
+        println!(
+            "  Titan Simulation: {}",
+            format_duration_ms(timings.titan_sim)
+        );
+        println!(
+            "  Jupiter Execution: {}",
+            format_duration_ms(timings.jupiter_exec)
+        );
+        println!(
+            "  Titan Execution: {}",
+            format_duration_ms(timings.titan_exec)
+        );
+        println!();
+    }
+
+    if let Some(timings) = timing_summary.best_price_back {
+        println!("Best Price Strategy (Back):");
+        println!(
+            "  Jupiter Simulation: {}",
+            format_duration_ms(timings.jupiter_sim)
+        );
+        println!(
+            "  Titan Simulation: {}",
+            format_duration_ms(timings.titan_sim)
+        );
+        println!(
+            "  Jupiter Execution: {}",
+            format_duration_ms(timings.jupiter_exec)
+        );
+        println!(
+            "  Titan Execution: {}",
+            format_duration_ms(timings.titan_exec)
+        );
+        println!();
+    }
+
+    if let Some(timings) = timing_summary.staircase_forward {
+        println!("Staircase Strategy (Forward):");
+        println!(
+            "  Jupiter Simulation: {}",
+            format_duration_ms(timings.jupiter_sim)
+        );
+        println!(
+            "  Titan Simulation: {}",
+            format_duration_ms(timings.titan_sim)
+        );
+        println!(
+            "  Jupiter Execution: {}",
+            format_duration_ms(timings.jupiter_exec)
+        );
+        println!(
+            "  Titan Execution: {}",
+            format_duration_ms(timings.titan_exec)
+        );
+        println!();
+    }
+
+    if let Some(timings) = timing_summary.staircase_back {
+        println!("Staircase Strategy (Back):");
+        println!(
+            "  Jupiter Simulation: {}",
+            format_duration_ms(timings.jupiter_sim)
+        );
+        println!(
+            "  Titan Simulation: {}",
+            format_duration_ms(timings.titan_sim)
+        );
+        println!(
+            "  Jupiter Execution: {}",
+            format_duration_ms(timings.jupiter_exec)
+        );
+        println!(
+            "  Titan Execution: {}",
+            format_duration_ms(timings.titan_exec)
+        );
+        println!();
     }
 
     println!("=== All Tests Completed Successfully ===");
@@ -134,6 +322,7 @@ async fn test_titan_swap(
     output: &str,
     amount: u64,
     slippage_bps: u16,
+    timing_summary: &mut TestTimingSummary,
 ) -> Result<()> {
     println!("Swapping {} lamports of {} -> {}", amount, input, output);
 
@@ -146,21 +335,29 @@ async fn test_titan_swap(
         ..Default::default()
     };
 
-    let result = client
+    let summary = client
         .swap_with_route_config(input, output, amount, route_config)
         .await?;
 
+    // Collect timing data
+    let sim_time = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Titan);
+    let exec_time = summary.swap_result.execution_time;
+    timing_summary.titan_forward = Some((sim_time, exec_time));
+
     println!("  ✓ Swap successful!");
-    println!("  Transaction: {}", result.signature);
-    println!("  Output Amount: {} lamports", result.out_amount);
-    if let Some(agg) = result.aggregator_used {
+    println!("  Transaction: {}", summary.swap_result.signature);
+    println!(
+        "  Output Amount: {} lamports",
+        summary.swap_result.out_amount
+    );
+    if let Some(agg) = summary.swap_result.aggregator_used {
         let agg_name = match agg {
             Aggregator::Titan => "Titan",
             Aggregator::Jupiter => "Jupiter",
         };
         println!("  Aggregator Used: {}", agg_name);
     }
-    if let Some(slippage_used) = result.slippage_bps_used {
+    if let Some(slippage_used) = summary.swap_result.slippage_bps_used {
         println!(
             "  Slippage Used: {} bps ({:.2}%)",
             slippage_used,
@@ -189,14 +386,28 @@ async fn test_titan_swap(
         ..Default::default()
     };
 
-    let result_back = client
-        .swap_with_route_config(output, input, result.out_amount, route_config_back)
+    let summary_back = client
+        .swap_with_route_config(
+            output,
+            input,
+            summary.swap_result.out_amount,
+            route_config_back,
+        )
         .await?;
 
+    // Collect timing data for swap back
+    let sim_time_back =
+        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Titan);
+    let exec_time_back = summary_back.swap_result.execution_time;
+    timing_summary.titan_back = Some((sim_time_back, exec_time_back));
+
     println!("  ✓ Swap back successful!");
-    println!("  Transaction: {}", result_back.signature);
-    println!("  Output Amount: {} lamports", result_back.out_amount);
-    if let Some(slippage_used) = result_back.slippage_bps_used {
+    println!("  Transaction: {}", summary_back.swap_result.signature);
+    println!(
+        "  Output Amount: {} lamports",
+        summary_back.swap_result.out_amount
+    );
+    if let Some(slippage_used) = summary_back.swap_result.slippage_bps_used {
         println!(
             "  Slippage Used: {} bps ({:.2}%)",
             slippage_used,
@@ -221,6 +432,7 @@ async fn test_jupiter_swap(
     output: &str,
     amount: u64,
     slippage_bps: u16,
+    timing_summary: &mut TestTimingSummary,
 ) -> Result<()> {
     println!("Swapping {} lamports of {} -> {}", amount, input, output);
 
@@ -233,21 +445,29 @@ async fn test_jupiter_swap(
         ..Default::default()
     };
 
-    let result = client
+    let summary = client
         .swap_with_route_config(input, output, amount, route_config)
         .await?;
 
+    // Collect timing data
+    let sim_time = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Jupiter);
+    let exec_time = summary.swap_result.execution_time;
+    timing_summary.jupiter_forward = Some((sim_time, exec_time));
+
     println!("  ✓ Swap successful!");
-    println!("  Transaction: {}", result.signature);
-    println!("  Output Amount: {} lamports", result.out_amount);
-    if let Some(agg) = result.aggregator_used {
+    println!("  Transaction: {}", summary.swap_result.signature);
+    println!(
+        "  Output Amount: {} lamports",
+        summary.swap_result.out_amount
+    );
+    if let Some(agg) = summary.swap_result.aggregator_used {
         let agg_name = match agg {
             Aggregator::Titan => "Titan",
             Aggregator::Jupiter => "Jupiter",
         };
         println!("  Aggregator Used: {}", agg_name);
     }
-    if let Some(slippage_used) = result.slippage_bps_used {
+    if let Some(slippage_used) = summary.swap_result.slippage_bps_used {
         println!(
             "  Slippage Used: {} bps ({:.2}%)",
             slippage_used,
@@ -276,14 +496,28 @@ async fn test_jupiter_swap(
         ..Default::default()
     };
 
-    let result_back = client
-        .swap_with_route_config(output, input, result.out_amount, route_config_back)
+    let summary_back = client
+        .swap_with_route_config(
+            output,
+            input,
+            summary.swap_result.out_amount,
+            route_config_back,
+        )
         .await?;
 
+    // Collect timing data for swap back
+    let sim_time_back =
+        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Jupiter);
+    let exec_time_back = summary_back.swap_result.execution_time;
+    timing_summary.jupiter_back = Some((sim_time_back, exec_time_back));
+
     println!("  ✓ Swap back successful!");
-    println!("  Transaction: {}", result_back.signature);
-    println!("  Output Amount: {} lamports", result_back.out_amount);
-    if let Some(slippage_used) = result_back.slippage_bps_used {
+    println!("  Transaction: {}", summary_back.swap_result.signature);
+    println!(
+        "  Output Amount: {} lamports",
+        summary_back.swap_result.out_amount
+    );
+    if let Some(slippage_used) = summary_back.swap_result.slippage_bps_used {
         println!(
             "  Slippage Used: {} bps ({:.2}%)",
             slippage_used,
@@ -308,6 +542,7 @@ async fn test_best_price(
     output: &str,
     amount: u64,
     slippage_bps: u16,
+    timing_summary: &mut TestTimingSummary,
 ) -> Result<()> {
     println!("Swapping {} lamports of {} -> {}", amount, input, output);
     println!("  Strategy: BestPrice (compares all aggregators)");
@@ -318,21 +553,44 @@ async fn test_best_price(
         ..Default::default()
     };
 
-    let result = client
+    let summary = client
         .swap_with_route_config(input, output, amount, route_config)
         .await?;
 
+    // Collect timing data
+    let jup_sim = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Jupiter);
+    let tit_sim = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Titan);
+    let jup_exec = if summary.swap_result.aggregator_used == Some(Aggregator::Jupiter) {
+        summary.swap_result.execution_time
+    } else {
+        None
+    };
+    let tit_exec = if summary.swap_result.aggregator_used == Some(Aggregator::Titan) {
+        summary.swap_result.execution_time
+    } else {
+        None
+    };
+    timing_summary.best_price_forward = Some(AggregatorTimings {
+        jupiter_sim: jup_sim,
+        titan_sim: tit_sim,
+        jupiter_exec: jup_exec,
+        titan_exec: tit_exec,
+    });
+
     println!("  ✓ Swap successful!");
-    println!("  Transaction: {}", result.signature);
-    println!("  Output Amount: {} lamports", result.out_amount);
-    if let Some(agg) = result.aggregator_used {
+    println!("  Transaction: {}", summary.swap_result.signature);
+    println!(
+        "  Output Amount: {} lamports",
+        summary.swap_result.out_amount
+    );
+    if let Some(agg) = summary.swap_result.aggregator_used {
         let agg_name = match agg {
             Aggregator::Titan => "Titan",
             Aggregator::Jupiter => "Jupiter",
         };
         println!("  Aggregator Used: {}", agg_name);
     }
-    if let Some(slippage_used) = result.slippage_bps_used {
+    if let Some(slippage_used) = summary.swap_result.slippage_bps_used {
         println!(
             "  Slippage Used: {} bps ({:.2}%)",
             slippage_used,
@@ -358,14 +616,44 @@ async fn test_best_price(
         ..Default::default()
     };
 
-    let result_back = client
-        .swap_with_route_config(output, input, result.out_amount, route_config_back)
+    let summary_back = client
+        .swap_with_route_config(
+            output,
+            input,
+            summary.swap_result.out_amount,
+            route_config_back,
+        )
         .await?;
 
+    // Collect timing data for swap back
+    let jup_sim_back =
+        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Jupiter);
+    let tit_sim_back =
+        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Titan);
+    let jup_exec_back = if summary_back.swap_result.aggregator_used == Some(Aggregator::Jupiter) {
+        summary_back.swap_result.execution_time
+    } else {
+        None
+    };
+    let tit_exec_back = if summary_back.swap_result.aggregator_used == Some(Aggregator::Titan) {
+        summary_back.swap_result.execution_time
+    } else {
+        None
+    };
+    timing_summary.best_price_back = Some(AggregatorTimings {
+        jupiter_sim: jup_sim_back,
+        titan_sim: tit_sim_back,
+        jupiter_exec: jup_exec_back,
+        titan_exec: tit_exec_back,
+    });
+
     println!("  ✓ Swap back successful!");
-    println!("  Transaction: {}", result_back.signature);
-    println!("  Output Amount: {} lamports", result_back.out_amount);
-    if let Some(slippage_used) = result_back.slippage_bps_used {
+    println!("  Transaction: {}", summary_back.swap_result.signature);
+    println!(
+        "  Output Amount: {} lamports",
+        summary_back.swap_result.out_amount
+    );
+    if let Some(slippage_used) = summary_back.swap_result.slippage_bps_used {
         println!(
             "  Slippage Used: {} bps ({:.2}%)",
             slippage_used,
@@ -389,6 +677,7 @@ async fn test_staircase(
     input: &str,
     output: &str,
     amount: u64,
+    timing_summary: &mut TestTimingSummary,
 ) -> Result<()> {
     println!("Swapping {} lamports of {} -> {}", amount, input, output);
     println!("  Strategy: LowestSlippageClimber (tests multiple slippage levels)");
@@ -406,21 +695,44 @@ async fn test_staircase(
         ..Default::default()
     };
 
-    let result = client
+    let summary = client
         .swap_with_route_config(input, output, amount, route_config)
         .await?;
 
+    // Collect timing data
+    let jup_sim = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Jupiter);
+    let tit_sim = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Titan);
+    let jup_exec = if summary.swap_result.aggregator_used == Some(Aggregator::Jupiter) {
+        summary.swap_result.execution_time
+    } else {
+        None
+    };
+    let tit_exec = if summary.swap_result.aggregator_used == Some(Aggregator::Titan) {
+        summary.swap_result.execution_time
+    } else {
+        None
+    };
+    timing_summary.staircase_forward = Some(AggregatorTimings {
+        jupiter_sim: jup_sim,
+        titan_sim: tit_sim,
+        jupiter_exec: jup_exec,
+        titan_exec: tit_exec,
+    });
+
     println!("  ✓ Swap successful!");
-    println!("  Transaction: {}", result.signature);
-    println!("  Output Amount: {} lamports", result.out_amount);
-    if let Some(agg) = result.aggregator_used {
+    println!("  Transaction: {}", summary.swap_result.signature);
+    println!(
+        "  Output Amount: {} lamports",
+        summary.swap_result.out_amount
+    );
+    if let Some(agg) = summary.swap_result.aggregator_used {
         let agg_name = match agg {
             Aggregator::Titan => "Titan",
             Aggregator::Jupiter => "Jupiter",
         };
         println!("  Aggregator Used: {}", agg_name);
     }
-    if let Some(slippage_used) = result.slippage_bps_used {
+    if let Some(slippage_used) = summary.swap_result.slippage_bps_used {
         println!(
             "  Final Slippage Used: {} bps ({:.2}%)",
             slippage_used,
@@ -462,14 +774,44 @@ async fn test_staircase(
         ..Default::default()
     };
 
-    let result_back = client
-        .swap_with_route_config(output, input, result.out_amount, route_config_back)
+    let summary_back = client
+        .swap_with_route_config(
+            output,
+            input,
+            summary.swap_result.out_amount,
+            route_config_back,
+        )
         .await?;
 
+    // Collect timing data for swap back
+    let jup_sim_back =
+        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Jupiter);
+    let tit_sim_back =
+        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Titan);
+    let jup_exec_back = if summary_back.swap_result.aggregator_used == Some(Aggregator::Jupiter) {
+        summary_back.swap_result.execution_time
+    } else {
+        None
+    };
+    let tit_exec_back = if summary_back.swap_result.aggregator_used == Some(Aggregator::Titan) {
+        summary_back.swap_result.execution_time
+    } else {
+        None
+    };
+    timing_summary.staircase_back = Some(AggregatorTimings {
+        jupiter_sim: jup_sim_back,
+        titan_sim: tit_sim_back,
+        jupiter_exec: jup_exec_back,
+        titan_exec: tit_exec_back,
+    });
+
     println!("  ✓ Swap back successful!");
-    println!("  Transaction: {}", result_back.signature);
-    println!("  Output Amount: {} lamports", result_back.out_amount);
-    if let Some(slippage_used) = result_back.slippage_bps_used {
+    println!("  Transaction: {}", summary_back.swap_result.signature);
+    println!(
+        "  Output Amount: {} lamports",
+        summary_back.swap_result.out_amount
+    );
+    if let Some(slippage_used) = summary_back.swap_result.slippage_bps_used {
         println!(
             "  Final Slippage Used: {} bps ({:.2}%)",
             slippage_used,

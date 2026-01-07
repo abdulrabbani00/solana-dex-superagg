@@ -15,6 +15,7 @@ use solana_sdk::{
     signature::{Keypair, Signer},
     transaction::VersionedTransaction,
 };
+use std::time::Instant;
 use std::{str::FromStr, sync::Arc};
 
 pub struct JupiterAggregator {
@@ -92,7 +93,10 @@ impl DexAggregator for JupiterAggregator {
         output: &str,
         amount: u64,
         slippage_bps: u16,
+        commitment_level: solana_sdk::commitment_config::CommitmentLevel,
     ) -> Result<SwapResult> {
+        let start_time = Instant::now();
+
         let input_mint =
             Pubkey::from_str(input).map_err(|e| anyhow!("Invalid input mint: {}", e))?;
         let output_mint =
@@ -152,7 +156,9 @@ impl DexAggregator for JupiterAggregator {
             .rpc_client
             .send_and_confirm_transaction_with_spinner_and_config(
                 &tx,
-                solana_sdk::commitment_config::CommitmentConfig::finalized(),
+                solana_sdk::commitment_config::CommitmentConfig {
+                    commitment: commitment_level,
+                },
                 RpcSendTransactionConfig {
                     skip_preflight: false,
                     preflight_commitment: Some(
@@ -163,11 +169,14 @@ impl DexAggregator for JupiterAggregator {
             )
             .map_err(|e| anyhow!("Failed to send transaction: {}", e))?;
 
+        let execution_time = start_time.elapsed();
+
         Ok(SwapResult {
             signature: sig.to_string(),
             out_amount,
             slippage_bps_used: Some(slippage_bps),
             aggregator_used: Some(crate::config::Aggregator::Jupiter),
+            execution_time: Some(execution_time),
         })
     }
 
@@ -178,6 +187,8 @@ impl DexAggregator for JupiterAggregator {
         amount: u64,
         slippage_bps: u16,
     ) -> Result<SimulateResult> {
+        let start_time = Instant::now();
+
         let input_mint =
             Pubkey::from_str(input).map_err(|e| anyhow!("Invalid input mint: {}", e))?;
         let output_mint =
@@ -199,6 +210,8 @@ impl DexAggregator for JupiterAggregator {
             .await
             .map_err(|e| anyhow!("Jupiter quote failed: {}", e))?;
 
+        let sim_time = start_time.elapsed();
+
         // Convert Decimal to f64 using TryInto
         let price_impact = quote_response
             .price_impact_pct
@@ -214,6 +227,7 @@ impl DexAggregator for JupiterAggregator {
                 fees: quote_response.platform_fee.as_ref().map(|f| f.amount),
                 extra: None,
             },
+            sim_time: Some(sim_time),
         })
     }
 }
