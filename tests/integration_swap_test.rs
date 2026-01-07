@@ -39,6 +39,13 @@ fn usd_to_sol_lamports(usd_amount: f64) -> u64 {
     (usd_amount / 100.0 * 1_000_000_000.0) as u64
 }
 
+struct AggregatorTimings {
+    jupiter_sim: Option<Duration>,
+    titan_sim: Option<Duration>,
+    jupiter_exec: Option<Duration>,
+    titan_exec: Option<Duration>,
+}
+
 /// Timing summary for a test
 #[derive(Default)]
 struct TestTimingSummary {
@@ -46,30 +53,10 @@ struct TestTimingSummary {
     titan_back: Option<(Option<Duration>, Option<Duration>)>,
     jupiter_forward: Option<(Option<Duration>, Option<Duration>)>,
     jupiter_back: Option<(Option<Duration>, Option<Duration>)>,
-    best_price_forward: Option<(
-        Option<Duration>,
-        Option<Duration>,
-        Option<Duration>,
-        Option<Duration>,
-    )>, // (jupiter_sim, titan_sim, jupiter_exec, titan_exec)
-    best_price_back: Option<(
-        Option<Duration>,
-        Option<Duration>,
-        Option<Duration>,
-        Option<Duration>,
-    )>,
-    staircase_forward: Option<(
-        Option<Duration>,
-        Option<Duration>,
-        Option<Duration>,
-        Option<Duration>,
-    )>,
-    staircase_back: Option<(
-        Option<Duration>,
-        Option<Duration>,
-        Option<Duration>,
-        Option<Duration>,
-    )>,
+    best_price_forward: Option<AggregatorTimings>,
+    best_price_back: Option<AggregatorTimings>,
+    staircase_forward: Option<AggregatorTimings>,
+    staircase_back: Option<AggregatorTimings>,
 }
 
 fn format_duration_ms(d: Option<Duration>) -> String {
@@ -240,39 +227,87 @@ async fn test_all_swap_methods() -> Result<()> {
         println!();
     }
 
-    if let Some((jup_sim, tit_sim, jup_exec, tit_exec)) = timing_summary.best_price_forward {
+    if let Some(timings) = timing_summary.best_price_forward {
         println!("Best Price Strategy (Forward):");
-        println!("  Jupiter Simulation: {}", format_duration_ms(jup_sim));
-        println!("  Titan Simulation: {}", format_duration_ms(tit_sim));
-        println!("  Jupiter Execution: {}", format_duration_ms(jup_exec));
-        println!("  Titan Execution: {}", format_duration_ms(tit_exec));
+        println!(
+            "  Jupiter Simulation: {}",
+            format_duration_ms(timings.jupiter_sim)
+        );
+        println!(
+            "  Titan Simulation: {}",
+            format_duration_ms(timings.titan_sim)
+        );
+        println!(
+            "  Jupiter Execution: {}",
+            format_duration_ms(timings.jupiter_exec)
+        );
+        println!(
+            "  Titan Execution: {}",
+            format_duration_ms(timings.titan_exec)
+        );
         println!();
     }
 
-    if let Some((jup_sim, tit_sim, jup_exec, tit_exec)) = timing_summary.best_price_back {
+    if let Some(timings) = timing_summary.best_price_back {
         println!("Best Price Strategy (Back):");
-        println!("  Jupiter Simulation: {}", format_duration_ms(jup_sim));
-        println!("  Titan Simulation: {}", format_duration_ms(tit_sim));
-        println!("  Jupiter Execution: {}", format_duration_ms(jup_exec));
-        println!("  Titan Execution: {}", format_duration_ms(tit_exec));
+        println!(
+            "  Jupiter Simulation: {}",
+            format_duration_ms(timings.jupiter_sim)
+        );
+        println!(
+            "  Titan Simulation: {}",
+            format_duration_ms(timings.titan_sim)
+        );
+        println!(
+            "  Jupiter Execution: {}",
+            format_duration_ms(timings.jupiter_exec)
+        );
+        println!(
+            "  Titan Execution: {}",
+            format_duration_ms(timings.titan_exec)
+        );
         println!();
     }
 
-    if let Some((jup_sim, tit_sim, jup_exec, tit_exec)) = timing_summary.staircase_forward {
+    if let Some(timings) = timing_summary.staircase_forward {
         println!("Staircase Strategy (Forward):");
-        println!("  Jupiter Simulation: {}", format_duration_ms(jup_sim));
-        println!("  Titan Simulation: {}", format_duration_ms(tit_sim));
-        println!("  Jupiter Execution: {}", format_duration_ms(jup_exec));
-        println!("  Titan Execution: {}", format_duration_ms(tit_exec));
+        println!(
+            "  Jupiter Simulation: {}",
+            format_duration_ms(timings.jupiter_sim)
+        );
+        println!(
+            "  Titan Simulation: {}",
+            format_duration_ms(timings.titan_sim)
+        );
+        println!(
+            "  Jupiter Execution: {}",
+            format_duration_ms(timings.jupiter_exec)
+        );
+        println!(
+            "  Titan Execution: {}",
+            format_duration_ms(timings.titan_exec)
+        );
         println!();
     }
 
-    if let Some((jup_sim, tit_sim, jup_exec, tit_exec)) = timing_summary.staircase_back {
+    if let Some(timings) = timing_summary.staircase_back {
         println!("Staircase Strategy (Back):");
-        println!("  Jupiter Simulation: {}", format_duration_ms(jup_sim));
-        println!("  Titan Simulation: {}", format_duration_ms(tit_sim));
-        println!("  Jupiter Execution: {}", format_duration_ms(jup_exec));
-        println!("  Titan Execution: {}", format_duration_ms(tit_exec));
+        println!(
+            "  Jupiter Simulation: {}",
+            format_duration_ms(timings.jupiter_sim)
+        );
+        println!(
+            "  Titan Simulation: {}",
+            format_duration_ms(timings.titan_sim)
+        );
+        println!(
+            "  Jupiter Execution: {}",
+            format_duration_ms(timings.jupiter_exec)
+        );
+        println!(
+            "  Titan Execution: {}",
+            format_duration_ms(timings.titan_exec)
+        );
         println!();
     }
 
@@ -535,7 +570,12 @@ async fn test_best_price(
     } else {
         None
     };
-    timing_summary.best_price_forward = Some((jup_sim, tit_sim, jup_exec, tit_exec));
+    timing_summary.best_price_forward = Some(AggregatorTimings {
+        jupiter_sim: jup_sim,
+        titan_sim: tit_sim,
+        jupiter_exec: jup_exec,
+        titan_exec: tit_exec,
+    });
 
     println!("  ✓ Swap successful!");
     println!("  Transaction: {}", summary.swap_result.signature);
@@ -600,8 +640,12 @@ async fn test_best_price(
     } else {
         None
     };
-    timing_summary.best_price_back =
-        Some((jup_sim_back, tit_sim_back, jup_exec_back, tit_exec_back));
+    timing_summary.best_price_back = Some(AggregatorTimings {
+        jupiter_sim: jup_sim_back,
+        titan_sim: tit_sim_back,
+        jupiter_exec: jup_exec_back,
+        titan_exec: tit_exec_back,
+    });
 
     println!("  ✓ Swap back successful!");
     println!("  Transaction: {}", summary_back.swap_result.signature);
@@ -668,7 +712,12 @@ async fn test_staircase(
     } else {
         None
     };
-    timing_summary.staircase_forward = Some((jup_sim, tit_sim, jup_exec, tit_exec));
+    timing_summary.staircase_forward = Some(AggregatorTimings {
+        jupiter_sim: jup_sim,
+        titan_sim: tit_sim,
+        jupiter_exec: jup_exec,
+        titan_exec: tit_exec,
+    });
 
     println!("  ✓ Swap successful!");
     println!("  Transaction: {}", summary.swap_result.signature);
@@ -749,8 +798,12 @@ async fn test_staircase(
     } else {
         None
     };
-    timing_summary.staircase_back =
-        Some((jup_sim_back, tit_sim_back, jup_exec_back, tit_exec_back));
+    timing_summary.staircase_back = Some(AggregatorTimings {
+        jupiter_sim: jup_sim_back,
+        titan_sim: tit_sim_back,
+        jupiter_exec: jup_exec_back,
+        titan_exec: tit_exec_back,
+    });
 
     println!("  ✓ Swap back successful!");
     println!("  Transaction: {}", summary_back.swap_result.signature);
