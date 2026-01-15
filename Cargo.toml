@@ -10,6 +10,9 @@ keywords = ["solana", "dex", "swap", "jupiter", "titan", "aggregator", "defi"]
 categories = ["cryptography::cryptocurrencies", "web-programming"]
 authors = ["Abdul Rabbani"]
 
+[workspace]
+members = ["apps/bench"]
+
 [lib]
 name = "solana_dex_superagg"
 path = "src/lib.rs"
