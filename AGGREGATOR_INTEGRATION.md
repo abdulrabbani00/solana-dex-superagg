@@ -29,7 +29,7 @@ All aggregators implement the `DexAggregator` async trait with two core methods:
 
 **1.1 Define the Aggregator Struct**
 ```rust
-use crate::aggregators::{DexAggregator, QuoteMetadata, QuoteResult, SwapResult};
+use crate::aggregators::{DexAggregator, QuoteMetadata, QuoteResult, SwapResult, SwapSummary};
 use crate::config::{Aggregator, ClientConfig};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -114,7 +114,7 @@ impl DexAggregator for YourAggregator {
         amount: u64,
         slippage_bps: u16,
         commitment_level: CommitmentLevel,
-    ) -> Result<SwapResult> {
+    ) -> Result<SwapSummary> {
         let start = Instant::now();
 
         // 1. Validate inputs
@@ -128,7 +128,21 @@ impl DexAggregator for YourAggregator {
         }
 
         // 2. Get quote from your API
+        let quote_start = Instant::now();
         let quote = self.client.get_quote(input, output, amount, slippage_bps).await?;
+        let quote_time = quote_start.elapsed();
+
+        // Capture quote result used for the swap
+        let quote_result = QuoteResult {
+            out_amount: quote.out_amount,
+            price_impact: quote.price_impact_pct,
+            metadata: QuoteMetadata {
+                route: quote.route_info,
+                fees: quote.fees,
+                extra: None,
+            },
+            quote_time: Some(quote_time),
+        };
 
         // 3. Build transaction (method varies by aggregator)
         let transaction = self.client.build_swap_transaction(quote, self.signer.pubkey()).await?;
@@ -149,12 +163,17 @@ impl DexAggregator for YourAggregator {
 
         let execution_time = start.elapsed();
 
-        Ok(SwapResult {
+        let swap_result = SwapResult {
             signature: sig.to_string(),
             out_amount: quote.out_amount,
             slippage_bps_used: Some(slippage_bps),
             aggregator_used: Some(Aggregator::YourAggregator),
             execution_time: Some(execution_time),
+        };
+
+        Ok(SwapSummary {
+            swap_result,
+            quote_results: vec![(Aggregator::YourAggregator, quote_result)],
         })
     }
 
@@ -170,7 +189,7 @@ impl DexAggregator for YourAggregator {
         // Get quote (same as swap, but don't execute)
         let quote = self.client.get_quote(input, output, amount, slippage_bps).await?;
 
-        let sim_time = start.elapsed();
+        let quote_time = start.elapsed();
 
         Ok(QuoteResult {
             out_amount: quote.out_amount,
@@ -180,7 +199,7 @@ impl DexAggregator for YourAggregator {
                 fees: quote.fees,
                 extra: None,
             },
-            sim_time: Some(sim_time),
+            quote_time: Some(quote_time),
         })
     }
 }
@@ -467,63 +486,28 @@ async fn swap_direct(
     };
 
     // Ensure aggregator_used is set
-    if result.aggregator_used.is_none() {
-        result.aggregator_used = Some(*aggregator);
+    if result.swap_result.aggregator_used.is_none() {
+        result.swap_result.aggregator_used = Some(*aggregator);
     }
 
     Ok(result)
 }
 ```
 
-**4.6 Update swap_with_simulation() (lines 364-408)**
+**4.6 Update swap_best_price() (lines 525-607)**
+
+Add quote logic (around lines 549-557):
 ```rust
-async fn swap_with_simulation(
-    &self,
-    input: &str,
-    output: &str,
-    amount: u64,
-    slippage_bps: u16,
-    aggregator: &Aggregator,
-    route_config: &RouteConfig,
-) -> Result<SwapSummary> {
-    let sim_result = match aggregator {
-        Aggregator::Jupiter => { /* existing */ },
-        Aggregator::Titan => { /* existing */ },
-        // ADD THIS:
-        Aggregator::YourAggregator => {
-            let your_agg = YourAggregator::new_with_compute_price(
-                &self.config,
-                Arc::clone(&self.signer),
-                route_config.compute_unit_price_micro_lamports,
-            )?;
-            your_agg.quote(input, output, amount, slippage_bps).await?
-        }
-    };
-
-    // Then execute swap
-    let swap_result = self.swap_direct(input, output, amount, slippage_bps, aggregator, route_config).await?;
-
-    Ok(SwapSummary {
-        swap_result,
-        sim_results: vec![(*aggregator, sim_result)],
-    })
-}
-```
-
-**4.7 Update swap_best_price() (lines 525-607)**
-
-Add simulation logic (around lines 549-557):
-```rust
-// YourAggregator simulation (if configured)
+// YourAggregator quote (if configured)
 if self.config.is_your_aggregator_configured() {
     if let Ok(your_agg) = YourAggregator::new_with_compute_price(
         &self.config,
         Arc::clone(&self.signer),
         route_config.compute_unit_price_micro_lamports,
     ) {
-        if let Ok(sim_result) = your_agg.quote(input, output, amount, slippage_bps).await {
-            sim_results.push((Aggregator::YourAggregator, sim_result.clone()));
-            comparison_results.push((Aggregator::YourAggregator, sim_result.out_amount));
+        if let Ok(quote_result) = your_agg.quote(input, output, amount, slippage_bps).await {
+            quote_results.push((Aggregator::YourAggregator, quote_result.clone()));
+            comparison_results.push((Aggregator::YourAggregator, quote_result.out_amount));
         }
     }
 }
@@ -629,8 +613,7 @@ Choose the pattern that matches your aggregator's API design.
 - [ ] Step 4.3: Add getter method (if persistent connection)
 - [ ] Step 4.4: Update `close()` method
 - [ ] Step 4.5: Update `swap_direct()` with match arm
-- [ ] Step 4.6: Update `swap_with_simulation()` with match arm
-- [ ] Step 4.7: Update `swap_best_price()` to include in comparison
+- [ ] Step 4.6: Update `swap_best_price()` to include in comparison
 - [ ] Step 4.8: Update all logging statements with aggregator name
 - [ ] Step 5: Document environment variables in README
 - [ ] Step 6: Add dependencies to `Cargo.toml`

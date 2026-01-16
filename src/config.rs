@@ -26,18 +26,14 @@ pub enum Aggregator {
 pub enum RoutingStrategy {
     /// Compare available aggregators and use the one that gives the most tokens (best price)
     ///
-    /// This is the default strategy. It simulates swaps on all available aggregators
+    /// This is the default strategy. It quotes swaps on all available aggregators
     /// (Jupiter and Titan if configured) and selects the one with the highest output amount.
     BestPrice,
     /// Use a preferred aggregator
     ///
     /// # Fields
     /// * `aggregator` - Which aggregator to use (Jupiter or Titan)
-    /// * `simulate` - Whether to simulate the swap before executing (true) or just ship it (false)
-    PreferredAggregator {
-        aggregator: Aggregator,
-        quote_first: bool,
-    },
+    PreferredAggregator { aggregator: Aggregator },
     /// Test multiple slippage levels and use the one with lowest slippage that succeeds
     ///
     /// # Fields
@@ -178,7 +174,7 @@ pub struct SharedConfig {
     /// Slippage tolerance in basis points (e.g., 25 = 0.25%)
     pub slippage_bps: u16,
     /// Wallet keypair (base58 encoded string, JSON array, or comma-separated bytes)
-    /// Optional - not required for simulation/quote-only operations
+    /// Optional - not required for quote-only operations
     #[serde(deserialize_with = "deserialize_wallet_keypair")]
     pub wallet_keypair: Option<String>,
     /// Compute unit price in micro lamports
@@ -695,7 +691,7 @@ impl ClientConfig {
     }
 
     /// Get the wallet keypair from the configuration
-    /// Returns None if no keypair is configured (useful for simulation/quote-only operations)
+    /// Returns None if no keypair is configured (useful for quote-only operations)
     pub fn get_keypair(&self) -> anyhow::Result<Option<Keypair>> {
         let wallet_keypair = match &self.shared.wallet_keypair {
             Some(kp) => kp,
@@ -1167,17 +1163,12 @@ mod tests {
                 "DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__AGGREGATOR",
                 "jupiter",
             );
-            jail.set_env("DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__SIMULATE", "true");
 
             let config = ClientConfig::from_env()?;
 
             match &config.shared.routing_strategy {
-                Some(RoutingStrategy::PreferredAggregator {
-                    aggregator,
-                    quote_first: simulate,
-                }) => {
+                Some(RoutingStrategy::PreferredAggregator { aggregator }) => {
                     assert_eq!(*aggregator, Aggregator::Jupiter);
-                    assert_eq!(*simulate, true);
                 }
                 _ => panic!("Expected PreferredAggregator with Jupiter"),
             }
@@ -1198,17 +1189,12 @@ mod tests {
                 "preferred_aggregator",
             );
             jail.set_env("DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__AGGREGATOR", "titan");
-            jail.set_env("DEX_SUPERAGG_SHARED__ROUTING_STRATEGY__SIMULATE", "false");
 
             let config = ClientConfig::from_env()?;
 
             match &config.shared.routing_strategy {
-                Some(RoutingStrategy::PreferredAggregator {
-                    aggregator,
-                    quote_first: simulate,
-                }) => {
+                Some(RoutingStrategy::PreferredAggregator { aggregator }) => {
                     assert_eq!(*aggregator, Aggregator::Titan);
-                    assert_eq!(*simulate, false);
                 }
                 _ => panic!("Expected PreferredAggregator with Titan"),
             }

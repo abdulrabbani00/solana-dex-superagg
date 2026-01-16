@@ -26,7 +26,7 @@ pub struct SwapResult {
     pub execution_time: Option<Duration>,
 }
 
-/// Result of a route operation
+/// Result of a quote operation
 #[derive(Debug, Clone)]
 pub struct QuoteResult {
     /// Expected output amount (in lamports/base units)
@@ -35,11 +35,11 @@ pub struct QuoteResult {
     pub price_impact: f64,
     /// Other quote metadata (can be extended with more fields)
     pub metadata: QuoteMetadata,
-    /// Time taken for route
-    pub sim_time: Option<Duration>,
+    /// Time taken for quote
+    pub quote_time: Option<Duration>,
 }
 
-/// Additional metadata from quote/simulation
+/// Additional metadata from quote
 #[derive(Debug, Clone, Default)]
 pub struct QuoteMetadata {
     /// Route information (e.g., "Raydium -> Orca")
@@ -50,14 +50,14 @@ pub struct QuoteMetadata {
     pub extra: Option<serde_json::Value>,
 }
 
-/// Summary of swap operations including swap result and all simulations performed
+/// Summary of swap operations including swap result and any quotes that were gathered
 #[derive(Debug, Clone)]
 pub struct SwapSummary {
     /// The swap result (always present when a swap was executed)
     pub swap_result: SwapResult,
-    /// All simulation results that were performed, keyed by aggregator
-    /// This allows capturing simulations for all aggregators (e.g., in BestPrice strategy)
-    pub sim_results: Vec<(Aggregator, QuoteResult)>,
+    /// Quote results that were performed, keyed by aggregator
+    /// This allows capturing quotes for all aggregators (e.g., in BestPrice strategy)
+    pub quote_results: Vec<(Aggregator, QuoteResult)>,
 }
 
 /// Trait that all DEX aggregators must implement
@@ -76,7 +76,7 @@ pub trait DexAggregator: Send + Sync {
     /// * `commitment_level` - Commitment level for transaction confirmation
     ///
     /// # Returns
-    /// `SwapResult` containing the transaction signature and output amount
+    /// `SwapSummary` containing the swap result and (at minimum) the quote used by the aggregator
     async fn swap(
         &self,
         input: &str,
@@ -84,7 +84,7 @@ pub trait DexAggregator: Send + Sync {
         amount: u64,
         slippage_bps: u16,
         commitment_level: CommitmentLevel,
-    ) -> Result<SwapResult>;
+    ) -> Result<SwapSummary>;
 
     /// Quote a swap to get quote information without executing
     ///

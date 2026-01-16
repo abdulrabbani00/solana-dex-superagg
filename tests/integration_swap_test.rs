@@ -40,16 +40,18 @@ fn usd_to_sol_lamports(usd_amount: f64) -> u64 {
 }
 
 struct AggregatorTimings {
-    jupiter_sim: Option<Duration>,
-    titan_sim: Option<Duration>,
+    jupiter_quote: Option<Duration>,
+    titan_quote: Option<Duration>,
+    dflow_quote: Option<Duration>,
     jupiter_exec: Option<Duration>,
     titan_exec: Option<Duration>,
+    dflow_exec: Option<Duration>,
 }
 
 /// Timing summary for a test
 #[derive(Default)]
 struct TestTimingSummary {
-    titan_forward: Option<(Option<Duration>, Option<Duration>)>, // (sim_time, exec_time)
+    titan_forward: Option<(Option<Duration>, Option<Duration>)>, // (quote_time, exec_time)
     titan_back: Option<(Option<Duration>, Option<Duration>)>,
     jupiter_forward: Option<(Option<Duration>, Option<Duration>)>,
     jupiter_back: Option<(Option<Duration>, Option<Duration>)>,
@@ -68,14 +70,14 @@ fn format_duration_ms(d: Option<Duration>) -> String {
     }
 }
 
-fn extract_timing_from_sim_results(
-    sim_results: &[(Aggregator, QuoteResult)],
+fn extract_timing_from_quote_results(
+    quote_results: &[(Aggregator, QuoteResult)],
     aggregator: Aggregator,
 ) -> Option<Duration> {
-    sim_results
+    quote_results
         .iter()
         .find(|(agg, _)| *agg == aggregator)
-        .map(|(_, sim)| sim.sim_time)
+        .map(|(_, quote)| quote.quote_time)
         .flatten()
 }
 
@@ -183,7 +185,10 @@ async fn test_all_swap_methods() -> Result<()> {
         println!("⚠ Skipped: DFlow not configured\n");
     }
 
-    // Test 3: Best Price (compares both aggregators)
+    // Test 3: Best Price (compares available aggregators)
+    //
+    // NOTE: This test requires Titan to be configured because the original goal was to compare
+    // Jupiter vs Titan. If DFlow is configured too, it will also be included in BestPrice.
     if client.config().is_titan_configured() {
         println!("=== Test 3: Best Price Strategy ===");
         test_best_price(
@@ -198,10 +203,12 @@ async fn test_all_swap_methods() -> Result<()> {
         println!();
     } else {
         println!("=== Test 3: Best Price Strategy ===");
-        println!("⚠ Skipped: Titan not configured (requires both aggregators)\n");
+        println!("⚠ Skipped: Titan not configured\n");
     }
 
     // Test 4: Staircase (LowestSlippageClimber)
+    //
+    // NOTE: Staircase uses the same underlying quote mechanisms and will include DFlow if configured.
     if client.config().is_titan_configured() {
         println!("=== Test 4: Staircase Strategy (LowestSlippageClimber) ===");
         test_staircase(
@@ -215,7 +222,7 @@ async fn test_all_swap_methods() -> Result<()> {
         println!();
     } else {
         println!("=== Test 4: Staircase Strategy ===");
-        println!("⚠ Skipped: Titan not configured (requires both aggregators)\n");
+        println!("⚠ Skipped: Titan not configured\n");
     }
 
     // Print timing summary
@@ -224,42 +231,42 @@ async fn test_all_swap_methods() -> Result<()> {
 
     if let Some((sim, exec)) = timing_summary.titan_forward {
         println!("Titan Swap (Forward):");
-        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Quote: {}", format_duration_ms(sim));
         println!("  Execution: {}", format_duration_ms(exec));
         println!();
     }
 
     if let Some((sim, exec)) = timing_summary.titan_back {
         println!("Titan Swap (Back):");
-        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Quote: {}", format_duration_ms(sim));
         println!("  Execution: {}", format_duration_ms(exec));
         println!();
     }
 
     if let Some((sim, exec)) = timing_summary.jupiter_forward {
         println!("Jupiter Swap (Forward):");
-        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Quote: {}", format_duration_ms(sim));
         println!("  Execution: {}", format_duration_ms(exec));
         println!();
     }
 
     if let Some((sim, exec)) = timing_summary.jupiter_back {
         println!("Jupiter Swap (Back):");
-        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Quote: {}", format_duration_ms(sim));
         println!("  Execution: {}", format_duration_ms(exec));
         println!();
     }
 
     if let Some((sim, exec)) = timing_summary.dflow_forward {
         println!("DFlow Swap (Forward):");
-        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Quote: {}", format_duration_ms(sim));
         println!("  Execution: {}", format_duration_ms(exec));
         println!();
     }
 
     if let Some((sim, exec)) = timing_summary.dflow_back {
         println!("DFlow Swap (Back):");
-        println!("  Simulation: {}", format_duration_ms(sim));
+        println!("  Quote: {}", format_duration_ms(sim));
         println!("  Execution: {}", format_duration_ms(exec));
         println!();
     }
@@ -267,13 +274,11 @@ async fn test_all_swap_methods() -> Result<()> {
     if let Some(timings) = timing_summary.best_price_forward {
         println!("Best Price Strategy (Forward):");
         println!(
-            "  Jupiter Simulation: {}",
-            format_duration_ms(timings.jupiter_sim)
+            "  Jupiter Quote: {}",
+            format_duration_ms(timings.jupiter_quote)
         );
-        println!(
-            "  Titan Simulation: {}",
-            format_duration_ms(timings.titan_sim)
-        );
+        println!("  Titan Quote: {}", format_duration_ms(timings.titan_quote));
+        println!("  DFlow Quote: {}", format_duration_ms(timings.dflow_quote));
         println!(
             "  Jupiter Execution: {}",
             format_duration_ms(timings.jupiter_exec)
@@ -281,6 +286,10 @@ async fn test_all_swap_methods() -> Result<()> {
         println!(
             "  Titan Execution: {}",
             format_duration_ms(timings.titan_exec)
+        );
+        println!(
+            "  DFlow Execution: {}",
+            format_duration_ms(timings.dflow_exec)
         );
         println!();
     }
@@ -288,13 +297,11 @@ async fn test_all_swap_methods() -> Result<()> {
     if let Some(timings) = timing_summary.best_price_back {
         println!("Best Price Strategy (Back):");
         println!(
-            "  Jupiter Simulation: {}",
-            format_duration_ms(timings.jupiter_sim)
+            "  Jupiter Quote: {}",
+            format_duration_ms(timings.jupiter_quote)
         );
-        println!(
-            "  Titan Simulation: {}",
-            format_duration_ms(timings.titan_sim)
-        );
+        println!("  Titan Quote: {}", format_duration_ms(timings.titan_quote));
+        println!("  DFlow Quote: {}", format_duration_ms(timings.dflow_quote));
         println!(
             "  Jupiter Execution: {}",
             format_duration_ms(timings.jupiter_exec)
@@ -302,6 +309,10 @@ async fn test_all_swap_methods() -> Result<()> {
         println!(
             "  Titan Execution: {}",
             format_duration_ms(timings.titan_exec)
+        );
+        println!(
+            "  DFlow Execution: {}",
+            format_duration_ms(timings.dflow_exec)
         );
         println!();
     }
@@ -309,13 +320,11 @@ async fn test_all_swap_methods() -> Result<()> {
     if let Some(timings) = timing_summary.staircase_forward {
         println!("Staircase Strategy (Forward):");
         println!(
-            "  Jupiter Simulation: {}",
-            format_duration_ms(timings.jupiter_sim)
+            "  Jupiter Quote: {}",
+            format_duration_ms(timings.jupiter_quote)
         );
-        println!(
-            "  Titan Simulation: {}",
-            format_duration_ms(timings.titan_sim)
-        );
+        println!("  Titan Quote: {}", format_duration_ms(timings.titan_quote));
+        println!("  DFlow Quote: {}", format_duration_ms(timings.dflow_quote));
         println!(
             "  Jupiter Execution: {}",
             format_duration_ms(timings.jupiter_exec)
@@ -323,6 +332,10 @@ async fn test_all_swap_methods() -> Result<()> {
         println!(
             "  Titan Execution: {}",
             format_duration_ms(timings.titan_exec)
+        );
+        println!(
+            "  DFlow Execution: {}",
+            format_duration_ms(timings.dflow_exec)
         );
         println!();
     }
@@ -330,13 +343,11 @@ async fn test_all_swap_methods() -> Result<()> {
     if let Some(timings) = timing_summary.staircase_back {
         println!("Staircase Strategy (Back):");
         println!(
-            "  Jupiter Simulation: {}",
-            format_duration_ms(timings.jupiter_sim)
+            "  Jupiter Quote: {}",
+            format_duration_ms(timings.jupiter_quote)
         );
-        println!(
-            "  Titan Simulation: {}",
-            format_duration_ms(timings.titan_sim)
-        );
+        println!("  Titan Quote: {}", format_duration_ms(timings.titan_quote));
+        println!("  DFlow Quote: {}", format_duration_ms(timings.dflow_quote));
         println!(
             "  Jupiter Execution: {}",
             format_duration_ms(timings.jupiter_exec)
@@ -344,6 +355,10 @@ async fn test_all_swap_methods() -> Result<()> {
         println!(
             "  Titan Execution: {}",
             format_duration_ms(timings.titan_exec)
+        );
+        println!(
+            "  DFlow Execution: {}",
+            format_duration_ms(timings.dflow_exec)
         );
         println!();
     }
@@ -366,7 +381,6 @@ async fn test_titan_swap(
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Titan,
-            quote_first: false, // Direct swap
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -377,9 +391,9 @@ async fn test_titan_swap(
         .await?;
 
     // Collect timing data
-    let sim_time = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Titan);
+    let quote_time = extract_timing_from_quote_results(&summary.quote_results, Aggregator::Titan);
     let exec_time = summary.swap_result.execution_time;
-    timing_summary.titan_forward = Some((sim_time, exec_time));
+    timing_summary.titan_forward = Some((quote_time, exec_time));
 
     println!("  ✓ Swap successful!");
     println!("  Transaction: {}", summary.swap_result.signature);
@@ -418,7 +432,6 @@ async fn test_titan_swap(
     let route_config_back = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Titan,
-            quote_first: false,
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -434,10 +447,10 @@ async fn test_titan_swap(
         .await?;
 
     // Collect timing data for swap back
-    let sim_time_back =
-        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Titan);
+    let quote_time_back =
+        extract_timing_from_quote_results(&summary_back.quote_results, Aggregator::Titan);
     let exec_time_back = summary_back.swap_result.execution_time;
-    timing_summary.titan_back = Some((sim_time_back, exec_time_back));
+    timing_summary.titan_back = Some((quote_time_back, exec_time_back));
 
     println!("  ✓ Swap back successful!");
     println!("  Transaction: {}", summary_back.swap_result.signature);
@@ -477,7 +490,6 @@ async fn test_jupiter_swap(
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Jupiter,
-            quote_first: false, // Direct swap
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -488,9 +500,9 @@ async fn test_jupiter_swap(
         .await?;
 
     // Collect timing data
-    let sim_time = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Jupiter);
+    let quote_time = extract_timing_from_quote_results(&summary.quote_results, Aggregator::Jupiter);
     let exec_time = summary.swap_result.execution_time;
-    timing_summary.jupiter_forward = Some((sim_time, exec_time));
+    timing_summary.jupiter_forward = Some((quote_time, exec_time));
 
     println!("  ✓ Swap successful!");
     println!("  Transaction: {}", summary.swap_result.signature);
@@ -529,7 +541,6 @@ async fn test_jupiter_swap(
     let route_config_back = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Jupiter,
-            quote_first: false,
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -545,10 +556,10 @@ async fn test_jupiter_swap(
         .await?;
 
     // Collect timing data for swap back
-    let sim_time_back =
-        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Jupiter);
+    let quote_time_back =
+        extract_timing_from_quote_results(&summary_back.quote_results, Aggregator::Jupiter);
     let exec_time_back = summary_back.swap_result.execution_time;
-    timing_summary.jupiter_back = Some((sim_time_back, exec_time_back));
+    timing_summary.jupiter_back = Some((quote_time_back, exec_time_back));
 
     println!("  ✓ Swap back successful!");
     println!("  Transaction: {}", summary_back.swap_result.signature);
@@ -588,7 +599,6 @@ async fn test_dflow_swap(
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Dflow,
-            quote_first: false, // Direct swap
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -599,9 +609,9 @@ async fn test_dflow_swap(
         .await?;
 
     // Collect timing data
-    let sim_time = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Dflow);
+    let quote_time = extract_timing_from_quote_results(&summary.quote_results, Aggregator::Dflow);
     let exec_time = summary.swap_result.execution_time;
-    timing_summary.dflow_forward = Some((sim_time, exec_time));
+    timing_summary.dflow_forward = Some((quote_time, exec_time));
 
     println!("  ✓ Swap successful!");
     println!("  Transaction: {}", summary.swap_result.signature);
@@ -640,7 +650,6 @@ async fn test_dflow_swap(
     let route_config_back = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Dflow,
-            quote_first: false,
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -656,10 +665,10 @@ async fn test_dflow_swap(
         .await?;
 
     // Collect timing data for swap back
-    let sim_time_back =
-        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Dflow);
+    let quote_time_back =
+        extract_timing_from_quote_results(&summary_back.quote_results, Aggregator::Dflow);
     let exec_time_back = summary_back.swap_result.execution_time;
-    timing_summary.dflow_back = Some((sim_time_back, exec_time_back));
+    timing_summary.dflow_back = Some((quote_time_back, exec_time_back));
 
     println!("  ✓ Swap back successful!");
     println!("  Transaction: {}", summary_back.swap_result.signature);
@@ -708,8 +717,9 @@ async fn test_best_price(
         .await?;
 
     // Collect timing data
-    let jup_sim = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Jupiter);
-    let tit_sim = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Titan);
+    let jup_quote = extract_timing_from_quote_results(&summary.quote_results, Aggregator::Jupiter);
+    let tit_quote = extract_timing_from_quote_results(&summary.quote_results, Aggregator::Titan);
+    let dflow_quote = extract_timing_from_quote_results(&summary.quote_results, Aggregator::Dflow);
     let jup_exec = if summary.swap_result.aggregator_used == Some(Aggregator::Jupiter) {
         summary.swap_result.execution_time
     } else {
@@ -720,11 +730,18 @@ async fn test_best_price(
     } else {
         None
     };
+    let dflow_exec = if summary.swap_result.aggregator_used == Some(Aggregator::Dflow) {
+        summary.swap_result.execution_time
+    } else {
+        None
+    };
     timing_summary.best_price_forward = Some(AggregatorTimings {
-        jupiter_sim: jup_sim,
-        titan_sim: tit_sim,
+        jupiter_quote: jup_quote,
+        titan_quote: tit_quote,
+        dflow_quote,
         jupiter_exec: jup_exec,
         titan_exec: tit_exec,
+        dflow_exec,
     });
 
     println!("  ✓ Swap successful!");
@@ -777,10 +794,12 @@ async fn test_best_price(
         .await?;
 
     // Collect timing data for swap back
-    let jup_sim_back =
-        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Jupiter);
-    let tit_sim_back =
-        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Titan);
+    let jup_quote_back =
+        extract_timing_from_quote_results(&summary_back.quote_results, Aggregator::Jupiter);
+    let tit_quote_back =
+        extract_timing_from_quote_results(&summary_back.quote_results, Aggregator::Titan);
+    let dflow_quote_back =
+        extract_timing_from_quote_results(&summary_back.quote_results, Aggregator::Dflow);
     let jup_exec_back = if summary_back.swap_result.aggregator_used == Some(Aggregator::Jupiter) {
         summary_back.swap_result.execution_time
     } else {
@@ -791,11 +810,18 @@ async fn test_best_price(
     } else {
         None
     };
+    let dflow_exec_back = if summary_back.swap_result.aggregator_used == Some(Aggregator::Dflow) {
+        summary_back.swap_result.execution_time
+    } else {
+        None
+    };
     timing_summary.best_price_back = Some(AggregatorTimings {
-        jupiter_sim: jup_sim_back,
-        titan_sim: tit_sim_back,
+        jupiter_quote: jup_quote_back,
+        titan_quote: tit_quote_back,
+        dflow_quote: dflow_quote_back,
         jupiter_exec: jup_exec_back,
         titan_exec: tit_exec_back,
+        dflow_exec: dflow_exec_back,
     });
 
     println!("  ✓ Swap back successful!");
@@ -851,8 +877,9 @@ async fn test_staircase(
         .await?;
 
     // Collect timing data
-    let jup_sim = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Jupiter);
-    let tit_sim = extract_timing_from_sim_results(&summary.sim_results, Aggregator::Titan);
+    let jup_quote = extract_timing_from_quote_results(&summary.quote_results, Aggregator::Jupiter);
+    let tit_quote = extract_timing_from_quote_results(&summary.quote_results, Aggregator::Titan);
+    let dflow_quote = extract_timing_from_quote_results(&summary.quote_results, Aggregator::Dflow);
     let jup_exec = if summary.swap_result.aggregator_used == Some(Aggregator::Jupiter) {
         summary.swap_result.execution_time
     } else {
@@ -863,11 +890,18 @@ async fn test_staircase(
     } else {
         None
     };
+    let dflow_exec = if summary.swap_result.aggregator_used == Some(Aggregator::Dflow) {
+        summary.swap_result.execution_time
+    } else {
+        None
+    };
     timing_summary.staircase_forward = Some(AggregatorTimings {
-        jupiter_sim: jup_sim,
-        titan_sim: tit_sim,
+        jupiter_quote: jup_quote,
+        titan_quote: tit_quote,
+        dflow_quote,
         jupiter_exec: jup_exec,
         titan_exec: tit_exec,
+        dflow_exec,
     });
 
     println!("  ✓ Swap successful!");
@@ -936,10 +970,12 @@ async fn test_staircase(
         .await?;
 
     // Collect timing data for swap back
-    let jup_sim_back =
-        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Jupiter);
-    let tit_sim_back =
-        extract_timing_from_sim_results(&summary_back.sim_results, Aggregator::Titan);
+    let jup_quote_back =
+        extract_timing_from_quote_results(&summary_back.quote_results, Aggregator::Jupiter);
+    let tit_quote_back =
+        extract_timing_from_quote_results(&summary_back.quote_results, Aggregator::Titan);
+    let dflow_quote_back =
+        extract_timing_from_quote_results(&summary_back.quote_results, Aggregator::Dflow);
     let jup_exec_back = if summary_back.swap_result.aggregator_used == Some(Aggregator::Jupiter) {
         summary_back.swap_result.execution_time
     } else {
@@ -950,11 +986,18 @@ async fn test_staircase(
     } else {
         None
     };
+    let dflow_exec_back = if summary_back.swap_result.aggregator_used == Some(Aggregator::Dflow) {
+        summary_back.swap_result.execution_time
+    } else {
+        None
+    };
     timing_summary.staircase_back = Some(AggregatorTimings {
-        jupiter_sim: jup_sim_back,
-        titan_sim: tit_sim_back,
+        jupiter_quote: jup_quote_back,
+        titan_quote: tit_quote_back,
+        dflow_quote: dflow_quote_back,
         jupiter_exec: jup_exec_back,
         titan_exec: tit_exec_back,
+        dflow_exec: dflow_exec_back,
     });
 
     println!("  ✓ Swap back successful!");

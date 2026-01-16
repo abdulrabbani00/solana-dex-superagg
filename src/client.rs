@@ -1,6 +1,6 @@
 use crate::aggregators::{
     dflow::DflowAggregator, jupiter::JupiterAggregator, titan::TitanAggregator, DexAggregator,
-    SwapResult, SwapSummary,
+    SwapSummary,
 };
 use crate::config::{Aggregator, ClientConfig, OutputAtaBehavior, RouteConfig, RoutingStrategy};
 use anyhow::{anyhow, Result};
@@ -203,7 +203,7 @@ impl DexSuperAggClient {
     /// * `amount` - Input amount in lamports/base units
     ///
     /// # Returns
-    /// `SwapSummary` containing the swap result and all simulation results
+    /// `SwapSummary` containing the swap result and all quote results
     ///
     /// Uses the default routing strategy from the client configuration.
     pub async fn swap(&self, input: &str, output: &str, amount: u64) -> Result<SwapSummary> {
@@ -221,7 +221,7 @@ impl DexSuperAggClient {
     /// * `route_config` - Route configuration for this swap
     ///
     /// # Returns
-    /// `SwapSummary` containing the swap result and all simulation results
+    /// `SwapSummary` containing the swap result and all quote results
     ///
     /// The route configuration allows per-swap customization of:
     /// - Compute unit price
@@ -259,38 +259,16 @@ impl DexSuperAggClient {
                 self.swap_best_price(input, output, amount, slippage_bps, &route_config)
                     .await
             }
-            Some(RoutingStrategy::PreferredAggregator {
-                aggregator,
-                quote_first: simulate,
-            }) => {
-                if *simulate {
-                    // Simulate first, then execute
-                    self.swap_with_simulation(
-                        input,
-                        output,
-                        amount,
-                        slippage_bps,
-                        aggregator,
-                        &route_config,
-                    )
-                    .await
-                } else {
-                    // Direct swap without simulation
-                    let swap_result = self
-                        .swap_direct(
-                            input,
-                            output,
-                            amount,
-                            slippage_bps,
-                            aggregator,
-                            &route_config,
-                        )
-                        .await?;
-                    Ok(SwapSummary {
-                        swap_result,
-                        sim_results: Vec::new(),
-                    })
-                }
+            Some(RoutingStrategy::PreferredAggregator { aggregator }) => {
+                self.swap_direct(
+                    input,
+                    output,
+                    amount,
+                    slippage_bps,
+                    aggregator,
+                    &route_config,
+                )
+                .await
             }
             Some(RoutingStrategy::LowestSlippageClimber {
                 floor_slippage_bps,
@@ -320,8 +298,8 @@ impl DexSuperAggClient {
         slippage_bps: u16,
         aggregator: &Aggregator,
         route_config: &RouteConfig,
-    ) -> Result<SwapResult> {
-        let mut result = match aggregator {
+    ) -> Result<SwapSummary> {
+        let mut summary = match aggregator {
             Aggregator::Jupiter => {
                 let jupiter = JupiterAggregator::new_with_compute_price(
                     &self.config,
@@ -370,64 +348,11 @@ impl DexSuperAggClient {
         };
 
         // Ensure aggregator_used is set (should already be set by aggregators, but ensure it)
-        if result.aggregator_used.is_none() {
-            result.aggregator_used = Some(*aggregator);
+        if summary.swap_result.aggregator_used.is_none() {
+            summary.swap_result.aggregator_used = Some(*aggregator);
         }
 
-        Ok(result)
-    }
-
-    /// Execute a swap with simulation first
-    async fn swap_with_simulation(
-        &self,
-        input: &str,
-        output: &str,
-        amount: u64,
-        slippage_bps: u16,
-        aggregator: &Aggregator,
-        route_config: &RouteConfig,
-    ) -> Result<SwapSummary> {
-        // Simulate first to validate the swap
-        let sim_result = match aggregator {
-            Aggregator::Jupiter => {
-                let jupiter = JupiterAggregator::new_with_compute_price(
-                    &self.config,
-                    Arc::clone(&self.signer),
-                    route_config.compute_unit_price_micro_lamports,
-                )?;
-                jupiter.quote(input, output, amount, slippage_bps).await?
-            }
-            Aggregator::Titan => {
-                // Reuse existing Titan aggregator to avoid opening new WebSocket connections
-                let titan = self.get_titan_aggregator().await?;
-                titan.quote(input, output, amount, slippage_bps).await?
-            }
-            Aggregator::Dflow => {
-                let dflow = DflowAggregator::new_with_compute_price(
-                    &self.config,
-                    Arc::clone(&self.signer),
-                    route_config.compute_unit_price_micro_lamports,
-                )?;
-                dflow.quote(input, output, amount, slippage_bps).await?
-            }
-        };
-
-        // Then execute the swap
-        let swap_result = self
-            .swap_direct(
-                input,
-                output,
-                amount,
-                slippage_bps,
-                aggregator,
-                route_config,
-            )
-            .await?;
-
-        Ok(SwapSummary {
-            swap_result,
-            sim_results: vec![(*aggregator, sim_result)],
-        })
+        Ok(summary)
     }
 
     /// Execute swap using lowest slippage climber strategy
@@ -554,42 +479,42 @@ impl DexSuperAggClient {
         slippage_bps: u16,
         route_config: &RouteConfig,
     ) -> Result<SwapSummary> {
-        // Simulate both aggregators to compare output amounts
-        let mut sim_results = Vec::new();
+        // Quote available aggregators to compare output amounts
+        let mut quote_results = Vec::new();
         let mut comparison_results = Vec::new();
 
-        // Jupiter simulation
+        // Jupiter quote
         if let Ok(jupiter) = JupiterAggregator::new_with_compute_price(
             &self.config,
             Arc::clone(&self.signer),
             route_config.compute_unit_price_micro_lamports,
         ) {
-            if let Ok(sim_result) = jupiter.quote(input, output, amount, slippage_bps).await {
-                sim_results.push((Aggregator::Jupiter, sim_result.clone()));
-                comparison_results.push((Aggregator::Jupiter, sim_result.out_amount));
+            if let Ok(quote_result) = jupiter.quote(input, output, amount, slippage_bps).await {
+                quote_results.push((Aggregator::Jupiter, quote_result.clone()));
+                comparison_results.push((Aggregator::Jupiter, quote_result.out_amount));
             }
         }
 
-        // Titan simulation (if configured)
+        // Titan quote (if configured)
         if self.config.is_titan_configured() {
             if let Ok(titan) = self.get_titan_aggregator().await {
-                if let Ok(sim_result) = titan.quote(input, output, amount, slippage_bps).await {
-                    sim_results.push((Aggregator::Titan, sim_result.clone()));
-                    comparison_results.push((Aggregator::Titan, sim_result.out_amount));
+                if let Ok(quote_result) = titan.quote(input, output, amount, slippage_bps).await {
+                    quote_results.push((Aggregator::Titan, quote_result.clone()));
+                    comparison_results.push((Aggregator::Titan, quote_result.out_amount));
                 }
             }
         }
 
-        // DFlow simulation (if configured)
+        // DFlow quote (if configured)
         if self.config.is_dflow_configured() {
             if let Ok(dflow) = DflowAggregator::new_with_compute_price(
                 &self.config,
                 Arc::clone(&self.signer),
                 route_config.compute_unit_price_micro_lamports,
             ) {
-                if let Ok(sim_result) = dflow.quote(input, output, amount, slippage_bps).await {
-                    sim_results.push((Aggregator::Dflow, sim_result.clone()));
-                    comparison_results.push((Aggregator::Dflow, sim_result.out_amount));
+                if let Ok(quote_result) = dflow.quote(input, output, amount, slippage_bps).await {
+                    quote_results.push((Aggregator::Dflow, quote_result.clone()));
+                    comparison_results.push((Aggregator::Dflow, quote_result.out_amount));
                 }
             }
         }
@@ -629,7 +554,7 @@ impl DexSuperAggClient {
         );
 
         // Execute swap with aggregator that gives the most tokens
-        let swap_result = self
+        let executed_summary = self
             .swap_direct(
                 input,
                 output,
@@ -641,8 +566,8 @@ impl DexSuperAggClient {
             .await?;
 
         Ok(SwapSummary {
-            swap_result,
-            sim_results,
+            swap_result: executed_summary.swap_result,
+            quote_results,
         })
     }
 }

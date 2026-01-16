@@ -96,7 +96,7 @@ cargo run --example basic_swap
 
 The `basic_swap` example demonstrates all features including:
 - Simple swap with default strategy
-- Best Price strategy with simulation results
+- Best Price strategy with quote results
 - Preferred aggregator (Jupiter and Titan)
 - Lowest Slippage Climber (staircase strategy)
 - Different commitment levels (Confirmed vs Finalized)
@@ -122,7 +122,7 @@ The library supports three routing strategies:
   Default is `Confirmed` for a good balance of speed and reliability. Use `Finalized` only for critical swaps that require absolute guarantees.
 - **Titan WebSocket**: The Titan aggregator maintains a persistent WebSocket connection that is reused across swaps for efficiency. Make sure to call `client.close().await?` when you're done to clean up resources.
 - **ATA Creation**: By default, the client will create Associated Token Accounts (ATAs) for output tokens if they don't exist. You can control this behavior via `RouteConfig::output_ata`.
-- **Timing Information**: Both `SwapResult` and `QuoteResult` include timing information (`execution_time` and `sim_time` respectively) to help you monitor performance. The `SwapSummary` includes all quote results, allowing you to see timing for all aggregators that were tried (useful for BestPrice strategy).
+- **Timing Information**: Both `SwapResult` and `QuoteResult` include timing information (`execution_time` and `quote_time` respectively) to help you monitor performance. The `SwapSummary` includes all quote results, allowing you to see timing for all aggregators that were tried (useful for BestPrice strategy).
 
 # Testing
 

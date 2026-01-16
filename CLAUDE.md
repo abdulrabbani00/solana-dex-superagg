@@ -106,7 +106,7 @@ The library supports three distinct routing strategies defined in `config.rs`:
 
 2. **PreferredAggregator**
    - Forces use of a specific aggregator (Jupiter or Titan)
-   - Optional quote before execution via `quote_first` flag
+   - Executes swap via the selected aggregator (the returned `SwapSummary` also includes the quote used)
    - Useful when you trust a specific aggregator or need deterministic routing
 
 3. **LowestSlippageClimber** (staircase strategy)

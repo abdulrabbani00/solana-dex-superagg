@@ -104,8 +104,8 @@ async fn main() -> Result<()> {
         slippage_percent = summary.swap_result.slippage_bps_used.map(|s| s as f64 / 100.0),
         "Swap successful"
     );
-    // Show simulation results for all aggregators that were tried
-    for (agg, sim_result) in &summary.sim_results {
+    // Show quote results for all aggregators that were tried
+    for (agg, sim_result) in &summary.quote_results {
         let agg_name = match agg {
             Aggregator::Jupiter => "Jupiter",
             Aggregator::Titan => "Titan",
@@ -114,8 +114,8 @@ async fn main() -> Result<()> {
         tracing::debug!(
             aggregator = agg_name,
             output_amount = sim_result.out_amount,
-            sim_time_ms = sim_result.sim_time.map(|t| t.as_secs_f64() * 1000.0),
-            "Simulation result"
+            sim_time_ms = sim_result.quote_time.map(|t| t.as_secs_f64() * 1000.0),
+            "Quote result"
         );
     }
 
@@ -125,7 +125,6 @@ async fn main() -> Result<()> {
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Jupiter,
-            quote_first: false, // Set to true to quote before executing
         }),
         slippage_bps: Some(25),
         commitment_level: CommitmentLevel::Confirmed, // Fast confirmation
@@ -147,7 +146,6 @@ async fn main() -> Result<()> {
         let route_config = RouteConfig {
             routing_strategy: Some(RoutingStrategy::PreferredAggregator {
                 aggregator: Aggregator::Titan,
-                quote_first: false,
             }),
             slippage_bps: Some(25),
             commitment_level: CommitmentLevel::Confirmed,
@@ -172,7 +170,6 @@ async fn main() -> Result<()> {
         let route_config = RouteConfig {
             routing_strategy: Some(RoutingStrategy::PreferredAggregator {
                 aggregator: Aggregator::Dflow,
-                quote_first: false,
             }),
             slippage_bps: Some(25),
             commitment_level: CommitmentLevel::Confirmed,
