@@ -26,16 +26,16 @@ pub struct SwapResult {
     pub execution_time: Option<Duration>,
 }
 
-/// Result of a simulation/quote operation
+/// Result of a route operation
 #[derive(Debug, Clone)]
-pub struct SimulateResult {
+pub struct QuoteResult {
     /// Expected output amount (in lamports/base units)
     pub out_amount: u64,
     /// Price impact as a percentage (e.g., 0.5 = 0.5% impact)
     pub price_impact: f64,
     /// Other quote metadata (can be extended with more fields)
     pub metadata: QuoteMetadata,
-    /// Time taken for simulation
+    /// Time taken for route
     pub sim_time: Option<Duration>,
 }
 
@@ -57,7 +57,7 @@ pub struct SwapSummary {
     pub swap_result: SwapResult,
     /// All simulation results that were performed, keyed by aggregator
     /// This allows capturing simulations for all aggregators (e.g., in BestPrice strategy)
-    pub sim_results: Vec<(Aggregator, SimulateResult)>,
+    pub sim_results: Vec<(Aggregator, QuoteResult)>,
 }
 
 /// Trait that all DEX aggregators must implement
@@ -86,7 +86,7 @@ pub trait DexAggregator: Send + Sync {
         commitment_level: CommitmentLevel,
     ) -> Result<SwapResult>;
 
-    /// Simulate a swap to get quote information without executing
+    /// Quote a swap to get quote information without executing
     ///
     /// # Arguments
     /// * `input` - Input token mint address (as string)
@@ -95,14 +95,14 @@ pub trait DexAggregator: Send + Sync {
     /// * `slippage_bps` - Slippage tolerance in basis points (e.g., 25 = 0.25%)
     ///
     /// # Returns
-    /// `SimulateResult` containing expected output amount, price impact, and metadata
-    async fn simulate(
+    /// `QuoteResult` containing expected output amount, price impact, and metadata
+    async fn quote(
         &self,
         input: &str,
         output: &str,
         amount: u64,
         slippage_bps: u16,
-    ) -> Result<SimulateResult>;
+    ) -> Result<QuoteResult>;
 }
 
 pub mod dflow;

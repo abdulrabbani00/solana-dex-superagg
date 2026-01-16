@@ -1,6 +1,6 @@
 //! Jupiter aggregator implementation
 
-use crate::aggregators::{DexAggregator, QuoteMetadata, SimulateResult, SwapResult};
+use crate::aggregators::{DexAggregator, QuoteMetadata, QuoteResult, SwapResult};
 use crate::config::ClientConfig;
 use anyhow::{anyhow, Result};
 use jupiter_swap_api_client::{
@@ -180,13 +180,13 @@ impl DexAggregator for JupiterAggregator {
         })
     }
 
-    async fn simulate(
+    async fn quote(
         &self,
         input: &str,
         output: &str,
         amount: u64,
         slippage_bps: u16,
-    ) -> Result<SimulateResult> {
+    ) -> Result<QuoteResult> {
         let start_time = Instant::now();
 
         let input_mint =
@@ -219,7 +219,7 @@ impl DexAggregator for JupiterAggregator {
             .parse::<f64>()
             .unwrap_or(0.0);
 
-        Ok(SimulateResult {
+        Ok(QuoteResult {
             out_amount: quote_response.out_amount,
             price_impact,
             metadata: QuoteMetadata {

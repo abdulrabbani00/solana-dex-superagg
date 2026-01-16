@@ -22,8 +22,8 @@
 
 use anyhow::Result;
 use solana_dex_superagg::{
-    aggregators::SimulateResult, client::DexSuperAggClient, config::Aggregator,
-    config::ClientConfig, config::RouteConfig, config::RoutingStrategy,
+    aggregators::QuoteResult, client::DexSuperAggClient, config::Aggregator, config::ClientConfig,
+    config::RouteConfig, config::RoutingStrategy,
 };
 use std::time::Duration;
 
@@ -69,7 +69,7 @@ fn format_duration_ms(d: Option<Duration>) -> String {
 }
 
 fn extract_timing_from_sim_results(
-    sim_results: &[(Aggregator, SimulateResult)],
+    sim_results: &[(Aggregator, QuoteResult)],
     aggregator: Aggregator,
 ) -> Option<Duration> {
     sim_results
@@ -366,7 +366,7 @@ async fn test_titan_swap(
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Titan,
-            simulate: false, // Direct swap
+            quote_first: false, // Direct swap
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -418,7 +418,7 @@ async fn test_titan_swap(
     let route_config_back = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Titan,
-            simulate: false,
+            quote_first: false,
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -477,7 +477,7 @@ async fn test_jupiter_swap(
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Jupiter,
-            simulate: false, // Direct swap
+            quote_first: false, // Direct swap
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -529,7 +529,7 @@ async fn test_jupiter_swap(
     let route_config_back = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Jupiter,
-            simulate: false,
+            quote_first: false,
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -588,7 +588,7 @@ async fn test_dflow_swap(
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Dflow,
-            simulate: false, // Direct swap
+            quote_first: false, // Direct swap
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -640,7 +640,7 @@ async fn test_dflow_swap(
     let route_config_back = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Dflow,
-            simulate: false,
+            quote_first: false,
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()

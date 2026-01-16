@@ -1,4 +1,4 @@
-use crate::aggregators::{DexAggregator, QuoteMetadata, SimulateResult, SwapResult};
+use crate::aggregators::{DexAggregator, QuoteMetadata, QuoteResult, SwapResult};
 use crate::config::{Aggregator, ClientConfig};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -431,13 +431,13 @@ impl DexAggregator for DflowAggregator {
         })
     }
 
-    async fn simulate(
+    async fn quote(
         &self,
         input: &str,
         output: &str,
         amount: u64,
         slippage_bps: u16,
-    ) -> Result<SimulateResult> {
+    ) -> Result<QuoteResult> {
         let start = Instant::now();
 
         // Get quote (simulation is just getting a quote without executing)
@@ -451,7 +451,7 @@ impl DexAggregator for DflowAggregator {
 
         let sim_time = start.elapsed();
 
-        Ok(SimulateResult {
+        Ok(QuoteResult {
             out_amount,
             price_impact: quote.price_impact_pct,
             metadata: QuoteMetadata {

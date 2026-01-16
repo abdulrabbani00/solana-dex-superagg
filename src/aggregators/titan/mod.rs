@@ -7,7 +7,7 @@ mod codec;
 mod transaction_builder;
 mod types;
 
-use crate::aggregators::{DexAggregator, QuoteMetadata, SimulateResult, SwapResult};
+use crate::aggregators::{DexAggregator, QuoteMetadata, QuoteResult, SwapResult};
 use crate::config::ClientConfig;
 use anyhow::{anyhow, Result};
 use solana_client::{
@@ -207,13 +207,13 @@ impl DexAggregator for TitanAggregator {
         })
     }
 
-    async fn simulate(
+    async fn quote(
         &self,
         input: &str,
         output: &str,
         amount: u64,
         slippage_bps: u16,
-    ) -> Result<SimulateResult> {
+    ) -> Result<QuoteResult> {
         let start_time = Instant::now();
 
         let user_pubkey = self.signer.as_ref().pubkey().to_string();
@@ -238,7 +238,7 @@ impl DexAggregator for TitanAggregator {
             0.0
         };
 
-        Ok(SimulateResult {
+        Ok(QuoteResult {
             out_amount: route.out_amount,
             price_impact,
             metadata: QuoteMetadata {

@@ -261,7 +261,7 @@ impl DexSuperAggClient {
             }
             Some(RoutingStrategy::PreferredAggregator {
                 aggregator,
-                simulate,
+                quote_first: simulate,
             }) => {
                 if *simulate {
                     // Simulate first, then execute
@@ -395,14 +395,12 @@ impl DexSuperAggClient {
                     Arc::clone(&self.signer),
                     route_config.compute_unit_price_micro_lamports,
                 )?;
-                jupiter
-                    .simulate(input, output, amount, slippage_bps)
-                    .await?
+                jupiter.quote(input, output, amount, slippage_bps).await?
             }
             Aggregator::Titan => {
                 // Reuse existing Titan aggregator to avoid opening new WebSocket connections
                 let titan = self.get_titan_aggregator().await?;
-                titan.simulate(input, output, amount, slippage_bps).await?
+                titan.quote(input, output, amount, slippage_bps).await?
             }
             Aggregator::Dflow => {
                 let dflow = DflowAggregator::new_with_compute_price(
@@ -410,7 +408,7 @@ impl DexSuperAggClient {
                     Arc::clone(&self.signer),
                     route_config.compute_unit_price_micro_lamports,
                 )?;
-                dflow.simulate(input, output, amount, slippage_bps).await?
+                dflow.quote(input, output, amount, slippage_bps).await?
             }
         };
 
@@ -566,7 +564,7 @@ impl DexSuperAggClient {
             Arc::clone(&self.signer),
             route_config.compute_unit_price_micro_lamports,
         ) {
-            if let Ok(sim_result) = jupiter.simulate(input, output, amount, slippage_bps).await {
+            if let Ok(sim_result) = jupiter.quote(input, output, amount, slippage_bps).await {
                 sim_results.push((Aggregator::Jupiter, sim_result.clone()));
                 comparison_results.push((Aggregator::Jupiter, sim_result.out_amount));
             }
@@ -575,7 +573,7 @@ impl DexSuperAggClient {
         // Titan simulation (if configured)
         if self.config.is_titan_configured() {
             if let Ok(titan) = self.get_titan_aggregator().await {
-                if let Ok(sim_result) = titan.simulate(input, output, amount, slippage_bps).await {
+                if let Ok(sim_result) = titan.quote(input, output, amount, slippage_bps).await {
                     sim_results.push((Aggregator::Titan, sim_result.clone()));
                     comparison_results.push((Aggregator::Titan, sim_result.out_amount));
                 }
@@ -589,7 +587,7 @@ impl DexSuperAggClient {
                 Arc::clone(&self.signer),
                 route_config.compute_unit_price_micro_lamports,
             ) {
-                if let Ok(sim_result) = dflow.simulate(input, output, amount, slippage_bps).await {
+                if let Ok(sim_result) = dflow.quote(input, output, amount, slippage_bps).await {
                     sim_results.push((Aggregator::Dflow, sim_result.clone()));
                     comparison_results.push((Aggregator::Dflow, sim_result.out_amount));
                 }

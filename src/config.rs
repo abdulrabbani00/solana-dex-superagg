@@ -36,7 +36,7 @@ pub enum RoutingStrategy {
     /// * `simulate` - Whether to simulate the swap before executing (true) or just ship it (false)
     PreferredAggregator {
         aggregator: Aggregator,
-        simulate: bool,
+        quote_first: bool,
     },
     /// Test multiple slippage levels and use the one with lowest slippage that succeeds
     ///
@@ -1174,7 +1174,7 @@ mod tests {
             match &config.shared.routing_strategy {
                 Some(RoutingStrategy::PreferredAggregator {
                     aggregator,
-                    simulate,
+                    quote_first: simulate,
                 }) => {
                     assert_eq!(*aggregator, Aggregator::Jupiter);
                     assert_eq!(*simulate, true);
@@ -1205,7 +1205,7 @@ mod tests {
             match &config.shared.routing_strategy {
                 Some(RoutingStrategy::PreferredAggregator {
                     aggregator,
-                    simulate,
+                    quote_first: simulate,
                 }) => {
                     assert_eq!(*aggregator, Aggregator::Titan);
                     assert_eq!(*simulate, false);

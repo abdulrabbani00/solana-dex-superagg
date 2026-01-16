@@ -11,7 +11,7 @@ The library currently supports Jupiter (HTTP-based) and Titan (WebSocket-based).
 ### DexAggregator Trait
 All aggregators implement the `DexAggregator` async trait with two core methods:
 - `swap()` - Execute a swap and return transaction signature + output amount
-- `simulate()` - Quote a swap without executing (for price comparison)
+- `quote()` - Quote a swap without executing (for price comparison)
 
 ### Key Components
 1. **Aggregator Implementation** - Your custom aggregator struct that implements `DexAggregator`
@@ -29,7 +29,7 @@ All aggregators implement the `DexAggregator` async trait with two core methods:
 
 **1.1 Define the Aggregator Struct**
 ```rust
-use crate::aggregators::{DexAggregator, QuoteMetadata, SimulateResult, SwapResult};
+use crate::aggregators::{DexAggregator, QuoteMetadata, QuoteResult, SwapResult};
 use crate::config::{Aggregator, ClientConfig};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -158,13 +158,13 @@ impl DexAggregator for YourAggregator {
         })
     }
 
-    async fn simulate(
+    async fn quote(
         &self,
         input: &str,
         output: &str,
         amount: u64,
         slippage_bps: u16,
-    ) -> Result<SimulateResult> {
+    ) -> Result<QuoteResult> {
         let start = Instant::now();
 
         // Get quote (same as swap, but don't execute)
@@ -172,7 +172,7 @@ impl DexAggregator for YourAggregator {
 
         let sim_time = start.elapsed();
 
-        Ok(SimulateResult {
+        Ok(QuoteResult {
             out_amount: quote.out_amount,
             price_impact: quote.price_impact_pct,
             metadata: QuoteMetadata {
@@ -496,7 +496,7 @@ async fn swap_with_simulation(
                 Arc::clone(&self.signer),
                 route_config.compute_unit_price_micro_lamports,
             )?;
-            your_agg.simulate(input, output, amount, slippage_bps).await?
+            your_agg.quote(input, output, amount, slippage_bps).await?
         }
     };
 
@@ -521,7 +521,7 @@ if self.config.is_your_aggregator_configured() {
         Arc::clone(&self.signer),
         route_config.compute_unit_price_micro_lamports,
     ) {
-        if let Ok(sim_result) = your_agg.simulate(input, output, amount, slippage_bps).await {
+        if let Ok(sim_result) = your_agg.quote(input, output, amount, slippage_bps).await {
             sim_results.push((Aggregator::YourAggregator, sim_result.clone()));
             comparison_results.push((Aggregator::YourAggregator, sim_result.out_amount));
         }
@@ -586,8 +586,8 @@ mod tests {
 
     #[tokio::test]
     #[ignore]
-    async fn test_simulate() {
-        // Test quote/simulation
+    async fn test_quote() {
+        // Test quote
     }
 }
 ```

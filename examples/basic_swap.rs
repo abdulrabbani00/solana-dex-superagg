@@ -125,7 +125,7 @@ async fn main() -> Result<()> {
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Jupiter,
-            simulate: false, // Set to true to simulate before executing
+            quote_first: false, // Set to true to quote before executing
         }),
         slippage_bps: Some(25),
         commitment_level: CommitmentLevel::Confirmed, // Fast confirmation
@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
         let route_config = RouteConfig {
             routing_strategy: Some(RoutingStrategy::PreferredAggregator {
                 aggregator: Aggregator::Titan,
-                simulate: false,
+                quote_first: false,
             }),
             slippage_bps: Some(25),
             commitment_level: CommitmentLevel::Confirmed,
@@ -172,7 +172,7 @@ async fn main() -> Result<()> {
         let route_config = RouteConfig {
             routing_strategy: Some(RoutingStrategy::PreferredAggregator {
                 aggregator: Aggregator::Dflow,
-                simulate: false,
+                quote_first: false,
             }),
             slippage_bps: Some(25),
             commitment_level: CommitmentLevel::Confirmed,

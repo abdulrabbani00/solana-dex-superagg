@@ -102,12 +102,15 @@ async fn test_dflow_swap() -> Result<()> {
 
     // Test: Simple DFlow Swap
     println!("=== Test: Simple DFlow Swap ===");
-    println!("Swapping {} lamports of {} -> {}", sol_amount, SOL_TOKEN, USDC_TOKEN);
+    println!(
+        "Swapping {} lamports of {} -> {}",
+        sol_amount, SOL_TOKEN, USDC_TOKEN
+    );
 
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Dflow,
-            simulate: false, // Direct swap
+            quote_first: false, // Direct swap
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -160,7 +163,10 @@ async fn test_dflow_swap() -> Result<()> {
             };
             println!("    {}: {} lamports", agg_name, sim_result.out_amount);
             if let Some(sim_time) = sim_result.sim_time {
-                println!("      Simulation Time: {}", format_duration_ms(Some(sim_time)));
+                println!(
+                    "      Simulation Time: {}",
+                    format_duration_ms(Some(sim_time))
+                );
             }
         }
     }
@@ -174,7 +180,7 @@ async fn test_dflow_swap() -> Result<()> {
     let route_config_back = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Dflow,
-            simulate: false,
+            quote_first: false,
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
