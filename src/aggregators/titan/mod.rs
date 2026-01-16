@@ -7,8 +7,8 @@ mod codec;
 mod transaction_builder;
 mod types;
 
-use crate::aggregators::{DexAggregator, QuoteMetadata, SimulateResult, SwapResult};
-use crate::config::ClientConfig;
+use crate::aggregators::{DexAggregator, QuoteMetadata, QuoteResult, SwapResult, SwapSummary};
+use crate::config::{Aggregator, ClientConfig};
 use anyhow::{anyhow, Result};
 use solana_client::{
     nonblocking::rpc_client::RpcClient as AsyncRpcClient, rpc_client::RpcClient,
@@ -138,17 +138,37 @@ impl DexAggregator for TitanAggregator {
         amount: u64,
         slippage_bps: u16,
         commitment_level: solana_sdk::commitment_config::CommitmentLevel,
-    ) -> Result<SwapResult> {
+    ) -> Result<SwapSummary> {
         let start_time = Instant::now();
 
         let user_pubkey = self.signer.as_ref().pubkey().to_string();
 
         // Request swap quotes with slippage
+        let quote_start = Instant::now();
         let (_provider, route) = self
             .titan_client
             .request_swap_quotes(input, output, amount, &user_pubkey, Some(slippage_bps))
             .await
             .map_err(|e| anyhow!("Failed to get swap quotes: {}", e))?;
+        let quote_time = quote_start.elapsed();
+
+        // Build a QuoteResult from the route we actually used
+        let price_impact = if route.in_amount > 0 {
+            let ratio = route.out_amount as f64 / route.in_amount as f64;
+            (1.0 - ratio).abs() * 100.0
+        } else {
+            0.0
+        };
+        let quote_result = QuoteResult {
+            out_amount: route.out_amount,
+            price_impact,
+            metadata: QuoteMetadata {
+                route: Some(format!("Titan route with {} steps", route.steps.len())),
+                fees: route.platform_fee.as_ref().map(|f| f.amount),
+                extra: None,
+            },
+            quote_time: Some(quote_time),
+        };
 
         // Get recent blockhash
         let recent_blockhash = self
@@ -198,34 +218,39 @@ impl DexAggregator for TitanAggregator {
 
         let execution_time = start_time.elapsed();
 
-        Ok(SwapResult {
+        let swap_result = SwapResult {
             signature: tx_signature.to_string(),
             out_amount: route.out_amount,
             slippage_bps_used: Some(slippage_bps),
-            aggregator_used: Some(crate::config::Aggregator::Titan),
+            aggregator_used: Some(Aggregator::Titan),
             execution_time: Some(execution_time),
+        };
+
+        Ok(SwapSummary {
+            swap_result,
+            quote_results: vec![(Aggregator::Titan, quote_result)],
         })
     }
 
-    async fn simulate(
+    async fn quote(
         &self,
         input: &str,
         output: &str,
         amount: u64,
         slippage_bps: u16,
-    ) -> Result<SimulateResult> {
+    ) -> Result<QuoteResult> {
         let start_time = Instant::now();
 
         let user_pubkey = self.signer.as_ref().pubkey().to_string();
 
-        // Request swap quotes with slippage (simulation doesn't execute)
+        // Request swap quotes with slippage (quote doesn't execute)
         let (_provider, route) = self
             .titan_client
             .request_swap_quotes(input, output, amount, &user_pubkey, Some(slippage_bps))
             .await
             .map_err(|e| anyhow!("Failed to get swap quotes: {}", e))?;
 
-        let sim_time = start_time.elapsed();
+        let quote_time = start_time.elapsed();
 
         // Calculate price impact (simplified: compare in_amount vs out_amount)
         // This is a rough estimate - actual price impact would require more market data
@@ -238,7 +263,7 @@ impl DexAggregator for TitanAggregator {
             0.0
         };
 
-        Ok(SimulateResult {
+        Ok(QuoteResult {
             out_amount: route.out_amount,
             price_impact,
             metadata: QuoteMetadata {
@@ -246,7 +271,7 @@ impl DexAggregator for TitanAggregator {
                 fees: route.platform_fee.as_ref().map(|f| f.amount),
                 extra: None,
             },
-            sim_time: Some(sim_time),
+            quote_time: Some(quote_time),
         })
     }
 }

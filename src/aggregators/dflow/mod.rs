@@ -1,4 +1,4 @@
-use crate::aggregators::{DexAggregator, QuoteMetadata, SimulateResult, SwapResult};
+use crate::aggregators::{DexAggregator, QuoteMetadata, QuoteResult, SwapResult, SwapSummary};
 use crate::config::{Aggregator, ClientConfig};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -374,7 +374,7 @@ impl DexAggregator for DflowAggregator {
         amount: u64,
         slippage_bps: u16,
         commitment_level: CommitmentLevel,
-    ) -> Result<SwapResult> {
+    ) -> Result<SwapSummary> {
         let start = Instant::now();
 
         // Validate inputs
@@ -388,13 +388,30 @@ impl DexAggregator for DflowAggregator {
         }
 
         // Get quote
+        let quote_start = Instant::now();
         let quote = self.get_quote(input, output, amount, slippage_bps).await?;
+        let quote_time = quote_start.elapsed();
 
         // Parse output amountfrom
         let out_amount: u64 = quote
             .out_amount
             .parse()
             .map_err(|e| anyhow!("Failed to parse output amount: {}", e))?;
+
+        let quote_result = QuoteResult {
+            out_amount,
+            price_impact: quote.price_impact_pct,
+            metadata: QuoteMetadata {
+                route: quote.route_plan.as_ref().and_then(|r| {
+                    serde_json::to_string(r)
+                        .ok()
+                        .map(|s| format!("DFlow: {}", s))
+                }),
+                fees: None, // DFlow doesn't provide separate fee information
+                extra: quote.route_plan.clone(),
+            },
+            quote_time: Some(quote_time),
+        };
 
         // Build transaction
         let mut transaction = self.build_swap_transaction(quote).await?;
@@ -422,25 +439,30 @@ impl DexAggregator for DflowAggregator {
 
         let execution_time = start.elapsed();
 
-        Ok(SwapResult {
+        let swap_result = SwapResult {
             signature: sig.to_string(),
             out_amount,
             slippage_bps_used: Some(slippage_bps),
             aggregator_used: Some(Aggregator::Dflow),
             execution_time: Some(execution_time),
+        };
+
+        Ok(SwapSummary {
+            swap_result,
+            quote_results: vec![(Aggregator::Dflow, quote_result)],
         })
     }
 
-    async fn simulate(
+    async fn quote(
         &self,
         input: &str,
         output: &str,
         amount: u64,
         slippage_bps: u16,
-    ) -> Result<SimulateResult> {
+    ) -> Result<QuoteResult> {
         let start = Instant::now();
 
-        // Get quote (simulation is just getting a quote without executing)
+        // Get quote (quote is just getting a quote without executing)
         let quote = self.get_quote(input, output, amount, slippage_bps).await?;
 
         // Parse output amount
@@ -449,9 +471,9 @@ impl DexAggregator for DflowAggregator {
             .parse()
             .map_err(|e| anyhow!("Failed to parse output amount: {}", e))?;
 
-        let sim_time = start.elapsed();
+        let quote_time = start.elapsed();
 
-        Ok(SimulateResult {
+        Ok(QuoteResult {
             out_amount,
             price_impact: quote.price_impact_pct,
             metadata: QuoteMetadata {
@@ -463,7 +485,7 @@ impl DexAggregator for DflowAggregator {
                 fees: None, // DFlow doesn't provide separate fee information
                 extra: quote.route_plan,
             },
-            sim_time: Some(sim_time),
+            quote_time: Some(quote_time),
         })
     }
 }

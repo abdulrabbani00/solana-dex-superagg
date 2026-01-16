@@ -82,7 +82,7 @@ cargo run --example basic_swap
 
 2. **DexAggregator Trait** (`src/aggregators/mod.rs`)
    - Unified interface for all DEX aggregators
-   - Two main operations: `swap()` and `simulate()`
+   - Two main operations: `swap()` and `quote()`
    - Implemented by `JupiterAggregator` and `TitanAggregator`
 
 3. **Configuration System** (`src/config.rs`)
@@ -100,13 +100,13 @@ cargo run --example basic_swap
 The library supports three distinct routing strategies defined in `config.rs`:
 
 1. **BestPrice** (default)
-   - Simulates swaps on all available aggregators in parallel
+   - Quotes swaps on all available aggregators in parallel
    - Selects the aggregator that returns the highest output amount
-   - Returns `SwapSummary` with all simulation results for transparency
+   - Returns `SwapSummary` with all quote results for transparency
 
 2. **PreferredAggregator**
    - Forces use of a specific aggregator (Jupiter or Titan)
-   - Optional simulation before execution via `simulate` flag
+   - Executes swap via the selected aggregator (the returned `SwapSummary` also includes the quote used)
    - Useful when you trust a specific aggregator or need deterministic routing
 
 3. **LowestSlippageClimber** (staircase strategy)
@@ -126,7 +126,7 @@ The library supports three distinct routing strategies defined in `config.rs`:
    - `Confirmed`: ~1-2s, very unlikely to roll back (default)
    - `Finalized`: ~15s, cannot be rolled back
 
-4. **Result Metadata**: Both `SwapResult` and `SimulateResult` include timing information and aggregator tracking for observability
+4. **Result Metadata**: Both `SwapResult` and `QuoteResult` include timing information and aggregator tracking for observability
 
 ## Important Implementation Details
 

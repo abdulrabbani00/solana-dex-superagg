@@ -1,7 +1,7 @@
 //! Jupiter aggregator implementation
 
-use crate::aggregators::{DexAggregator, QuoteMetadata, SimulateResult, SwapResult};
-use crate::config::ClientConfig;
+use crate::aggregators::{DexAggregator, QuoteMetadata, QuoteResult, SwapResult, SwapSummary};
+use crate::config::{Aggregator, ClientConfig};
 use anyhow::{anyhow, Result};
 use jupiter_swap_api_client::{
     quote::QuoteRequest,
@@ -94,7 +94,7 @@ impl DexAggregator for JupiterAggregator {
         amount: u64,
         slippage_bps: u16,
         commitment_level: solana_sdk::commitment_config::CommitmentLevel,
-    ) -> Result<SwapResult> {
+    ) -> Result<SwapSummary> {
         let start_time = Instant::now();
 
         let input_mint =
@@ -106,6 +106,7 @@ impl DexAggregator for JupiterAggregator {
             return Err(anyhow!("Input and output mints cannot be the same"));
         }
 
+        let quote_start = Instant::now();
         let quote_response = self
             .jupiter_client
             .quote(&QuoteRequest {
@@ -117,8 +118,25 @@ impl DexAggregator for JupiterAggregator {
             })
             .await
             .map_err(|e| anyhow!("Jupiter quote failed: {}", e))?;
+        let quote_time = quote_start.elapsed();
 
         let out_amount = quote_response.out_amount;
+        let price_impact = quote_response
+            .price_impact_pct
+            .to_string()
+            .parse::<f64>()
+            .unwrap_or(0.0);
+        let quote_result = QuoteResult {
+            out_amount,
+            price_impact,
+            metadata: QuoteMetadata {
+                route: None,
+                fees: quote_response.platform_fee.as_ref().map(|f| f.amount),
+                extra: None,
+            },
+            quote_time: Some(quote_time),
+        };
+
         let swap_config = TransactionConfig {
             wrap_and_unwrap_sol: true,
             compute_unit_price_micro_lamports: if self.compute_unit_price_micro_lamports > 0 {
@@ -171,22 +189,27 @@ impl DexAggregator for JupiterAggregator {
 
         let execution_time = start_time.elapsed();
 
-        Ok(SwapResult {
+        let swap_result = SwapResult {
             signature: sig.to_string(),
             out_amount,
             slippage_bps_used: Some(slippage_bps),
-            aggregator_used: Some(crate::config::Aggregator::Jupiter),
+            aggregator_used: Some(Aggregator::Jupiter),
             execution_time: Some(execution_time),
+        };
+
+        Ok(SwapSummary {
+            swap_result,
+            quote_results: vec![(Aggregator::Jupiter, quote_result)],
         })
     }
 
-    async fn simulate(
+    async fn quote(
         &self,
         input: &str,
         output: &str,
         amount: u64,
         slippage_bps: u16,
-    ) -> Result<SimulateResult> {
+    ) -> Result<QuoteResult> {
         let start_time = Instant::now();
 
         let input_mint =
@@ -210,7 +233,7 @@ impl DexAggregator for JupiterAggregator {
             .await
             .map_err(|e| anyhow!("Jupiter quote failed: {}", e))?;
 
-        let sim_time = start_time.elapsed();
+        let quote_time = start_time.elapsed();
 
         // Convert Decimal to f64 using TryInto
         let price_impact = quote_response
@@ -219,7 +242,7 @@ impl DexAggregator for JupiterAggregator {
             .parse::<f64>()
             .unwrap_or(0.0);
 
-        Ok(SimulateResult {
+        Ok(QuoteResult {
             out_amount: quote_response.out_amount,
             price_impact,
             metadata: QuoteMetadata {
@@ -227,7 +250,7 @@ impl DexAggregator for JupiterAggregator {
                 fees: quote_response.platform_fee.as_ref().map(|f| f.amount),
                 extra: None,
             },
-            sim_time: Some(sim_time),
+            quote_time: Some(quote_time),
         })
     }
 }

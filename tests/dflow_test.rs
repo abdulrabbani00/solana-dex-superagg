@@ -102,12 +102,14 @@ async fn test_dflow_swap() -> Result<()> {
 
     // Test: Simple DFlow Swap
     println!("=== Test: Simple DFlow Swap ===");
-    println!("Swapping {} lamports of {} -> {}", sol_amount, SOL_TOKEN, USDC_TOKEN);
+    println!(
+        "Swapping {} lamports of {} -> {}",
+        sol_amount, SOL_TOKEN, USDC_TOKEN
+    );
 
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Dflow,
-            simulate: false, // Direct swap
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
@@ -149,18 +151,18 @@ async fn test_dflow_swap() -> Result<()> {
         println!("  Execution Time: {}", format_duration_ms(Some(exec_time)));
     }
 
-    // Show simulation results if available
-    if !summary.sim_results.is_empty() {
-        println!("\n  Simulation Results:");
-        for (agg, sim_result) in &summary.sim_results {
+    // Show quote results if available
+    if !summary.quote_results.is_empty() {
+        println!("\n  Quote Results:");
+        for (agg, sim_result) in &summary.quote_results {
             let agg_name = match agg {
                 Aggregator::Titan => "Titan",
                 Aggregator::Jupiter => "Jupiter",
                 Aggregator::Dflow => "DFlow",
             };
             println!("    {}: {} lamports", agg_name, sim_result.out_amount);
-            if let Some(sim_time) = sim_result.sim_time {
-                println!("      Simulation Time: {}", format_duration_ms(Some(sim_time)));
+            if let Some(quote_time) = sim_result.quote_time {
+                println!("      Quote Time: {}", format_duration_ms(Some(quote_time)));
             }
         }
     }
@@ -174,7 +176,6 @@ async fn test_dflow_swap() -> Result<()> {
     let route_config_back = RouteConfig {
         routing_strategy: Some(RoutingStrategy::PreferredAggregator {
             aggregator: Aggregator::Dflow,
-            simulate: false,
         }),
         slippage_bps: Some(slippage_bps),
         ..Default::default()
