@@ -91,10 +91,11 @@ async fn main() -> Result<()> {
         routing_strategy: Some(RoutingStrategy::BestPrice),
         slippage_bps: Some(25), // Override default slippage to 0.25%
         commitment_level: CommitmentLevel::Confirmed, // Use Confirmed for faster execution
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
     let summary = client
-        .swap_with_route_config(sol, usdc, amount, route_config, true)
+        .swap_with_route_config(sol, usdc, amount, route_config)
         .await?;
     tracing::info!(
         transaction = %summary.swap_result.signature,
@@ -128,10 +129,11 @@ async fn main() -> Result<()> {
         }),
         slippage_bps: Some(25),
         commitment_level: CommitmentLevel::Confirmed, // Fast confirmation
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
     let summary = client
-        .swap_with_route_config(sol, usdc, amount, route_config, true)
+        .swap_with_route_config(sol, usdc, amount, route_config)
         .await?;
     tracing::info!(
         transaction = %summary.swap_result.signature,
@@ -149,10 +151,11 @@ async fn main() -> Result<()> {
             }),
             slippage_bps: Some(25),
             commitment_level: CommitmentLevel::Confirmed,
+            wrap_and_unwrap_sol: true,
             ..Default::default()
         };
         let summary = client
-            .swap_with_route_config(sol, usdc, amount, route_config, true)
+            .swap_with_route_config(sol, usdc, amount, route_config)
             .await?;
         tracing::info!(
             transaction = %summary.swap_result.signature,
@@ -173,10 +176,11 @@ async fn main() -> Result<()> {
             }),
             slippage_bps: Some(25),
             commitment_level: CommitmentLevel::Confirmed,
+            wrap_and_unwrap_sol: true,
             ..Default::default()
         };
         let summary = client
-            .swap_with_route_config(sol, usdc, amount, route_config, true)
+            .swap_with_route_config(sol, usdc, amount, route_config)
             .await?;
         tracing::info!(
             transaction = %summary.swap_result.signature,
@@ -200,10 +204,11 @@ async fn main() -> Result<()> {
             step_bps: 10,           // Step by 0.1%
         }),
         commitment_level: CommitmentLevel::Confirmed,
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
     let summary = client
-        .swap_with_route_config(sol, usdc, amount, route_config, true)
+        .swap_with_route_config(sol, usdc, amount, route_config)
         .await?;
     tracing::info!(
         transaction = %summary.swap_result.signature,
@@ -220,10 +225,11 @@ async fn main() -> Result<()> {
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::BestPrice),
         commitment_level: CommitmentLevel::Finalized, // Use Finalized for critical swaps
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
     let summary = client
-        .swap_with_route_config(sol, usdc, amount, route_config, true)
+        .swap_with_route_config(sol, usdc, amount, route_config)
         .await?;
     tracing::info!(
         transaction = %summary.swap_result.signature,
