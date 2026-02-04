@@ -108,10 +108,6 @@ impl DexSuperAggClient {
     ///
     /// # Returns
     /// `Ok(())` if the ATA exists or was successfully created, `Err` otherwise
-    ///
-    /// # Note
-    /// This function skips ATA creation for native SOL (So11111111111111111111111111111111111111112)
-    /// because native SOL doesn't use token accounts - it uses the native account balance.
     async fn create_ata_if_needed(&self, mint: &str) -> Result<()> {
         let mint_pubkey =
             Pubkey::from_str(mint).map_err(|e| anyhow!("Invalid mint address: {}", e))?;
