@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
     // Example 1: Simple swap (uses default strategy from config - usually BestPrice)
     // This is the easiest way to swap - no configuration needed!
     tracing::info!("Example 1: Simple Swap (Default Strategy)");
-    let summary = client.swap(sol, usdc, amount).await?;
+    let summary = client.swap(sol, usdc, amount, true).await?;
     tracing::info!(
         transaction = %summary.swap_result.signature,
         output_amount = summary.swap_result.out_amount,
@@ -91,6 +91,7 @@ async fn main() -> Result<()> {
         routing_strategy: Some(RoutingStrategy::BestPrice),
         slippage_bps: Some(25), // Override default slippage to 0.25%
         commitment_level: CommitmentLevel::Confirmed, // Use Confirmed for faster execution
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
     let summary = client
@@ -128,6 +129,7 @@ async fn main() -> Result<()> {
         }),
         slippage_bps: Some(25),
         commitment_level: CommitmentLevel::Confirmed, // Fast confirmation
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
     let summary = client
@@ -149,6 +151,7 @@ async fn main() -> Result<()> {
             }),
             slippage_bps: Some(25),
             commitment_level: CommitmentLevel::Confirmed,
+            wrap_and_unwrap_sol: true,
             ..Default::default()
         };
         let summary = client
@@ -173,6 +176,7 @@ async fn main() -> Result<()> {
             }),
             slippage_bps: Some(25),
             commitment_level: CommitmentLevel::Confirmed,
+            wrap_and_unwrap_sol: true,
             ..Default::default()
         };
         let summary = client
@@ -200,6 +204,7 @@ async fn main() -> Result<()> {
             step_bps: 10,           // Step by 0.1%
         }),
         commitment_level: CommitmentLevel::Confirmed,
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
     let summary = client
@@ -220,6 +225,7 @@ async fn main() -> Result<()> {
     let route_config = RouteConfig {
         routing_strategy: Some(RoutingStrategy::BestPrice),
         commitment_level: CommitmentLevel::Finalized, // Use Finalized for critical swaps
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
     let summary = client

@@ -112,6 +112,7 @@ async fn test_dflow_swap() -> Result<()> {
             aggregator: Aggregator::Dflow,
         }),
         slippage_bps: Some(slippage_bps),
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
 
@@ -178,6 +179,7 @@ async fn test_dflow_swap() -> Result<()> {
             aggregator: Aggregator::Dflow,
         }),
         slippage_bps: Some(slippage_bps),
+        wrap_and_unwrap_sol: true,
         ..Default::default()
     };
 
